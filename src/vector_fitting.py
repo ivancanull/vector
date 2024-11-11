@@ -8,7 +8,7 @@ DEBUG = True
 __all__ = ["VectorFitting"]
 
 class VectorFitting:
-    def __init__(self, freq, Z, init_poles, max_iter=100, tol=1e-6, relaxed=False):
+    def __init__(self, freq, Z, init_poles, max_iter=100, tol=1e-6, relaxed=False, d_fit=True, e_fit=True):
         """
         Initialize the VectorFitting instance.
         
@@ -53,6 +53,9 @@ class VectorFitting:
         self.residues = np.zeros_like(self.init_poles, dtype=complex)
         self.d = 0
         self.h = 0
+
+        self.d_fit = d_fit
+        self.e_fit = e_fit
 
         # whether to use d residues in Gustavsen's relocating method
         self.relaxed = relaxed
@@ -108,24 +111,25 @@ class VectorFitting:
         
         for iteration in range(self.max_iter):
             
-            
-            # Stage 1: poles and zeros identification
-
-            # Appendix A: pole identification
             self.cindex = get_cindex(self.poles)
-            A, B = self._construct_AB_matrices(self.s, stage="pole")
-            x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=None)
-            print(x)
-            # Appendix B: calculation of zeros
-            self._calculate_zeros(x[self.N_poles + 2:])
 
-            # Stage 2: residue identification
-            
-            self.cindex = get_cindex(self.poles)
-            A, B = self._construct_AB_matrices(self.s, stage="residue")
-            
-            x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=None)
-            self._update_parameters_residue(x)
+            # stage 1: poles and zeros identification
+            if self.relaxed:
+                self._pole_relocating(self.s)
+                self._fit_residues(self.s)
+            else:
+                # appendix A: pole identification
+                A, B = self._construct_AB_matrices(self.s, stage="pole")
+                x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=None)
+                # Appendix B: calculation of zeros
+                self._calculate_zeros(x[self.N_poles + 2:])
+
+                # stage 2: residue identification
+                self.cindex = get_cindex(self.poles)
+                A, B = self._construct_AB_matrices(self.s, stage="residue")
+                
+                x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=1e-10)
+                self._update_parameters_residue(x)
 
             if DEBUG:
                 print('-' * 50)
@@ -139,26 +143,148 @@ class VectorFitting:
                 # if len(sorted_poles) == len(sorted_poles_fit):
                 #     poles_error, residues_error, d_error, h_error = self.estimate_poles_residues_error(method="Error")
                 #     self.print_params(poles_error, residues_error, d_error, h_error, postfix="error")
-            
     
+    def _pole_relocating(self, s):
+        """
+        Relocate the poles of the rational function.
+        """
+        Ns = len(s)
+        A = np.zeros((Ns, self.N_poles * 2 + 3), dtype=complex)
+        # [c1, c2, ..., cn, d, e, c1_res, c2_res, ..., cn_res, d_res]
+        for i, p in enumerate(self.poles):
+            if self.cindex[i] == 0:
+                A[:, i] = 1 / (s - p)
+            elif self.cindex[i] == 1:
+                A[:, i] = 1 / (s - p) + 1 / (s - np.conj(p))
+            elif self.cindex[i] == 2:
+                A[:, i] = 1j / (s - p) - 1j / (s - np.conj(p))
+            else:
+                raise RuntimeError("cindex[%s] = %s" % (i, self.cindex[i]))
+
+            A[:, self.N_poles + 2 + i] = -A[:, i] * self.Z
+
+        A[:, self.N_poles] = 1
+        A[:, self.N_poles + 1] = s
+        A[:, self.N_poles * 2 + 2] = -1 * self.Z
+
+        # sum up the real of the poles for future use
+        trival_coeff = np.sum(A[:, :self.N_poles].real, axis=0)
+
+        A = np.vstack([A.real, A.imag])
+        R = np.linalg.qr(A, mode='r')
+        dim_k = min(2 * Ns, self.N_poles * 2 + 3)
+        if dim_k < self.N_poles * 2 + 3:
+            r12_nrows = Ns
+            r22_nrows = Ns
+        else:
+            r12_nrows = self.N_poles + 2
+            r22_nrows = self.N_poles + 1
+        r12_ncols = self.N_poles + 2
+        r22_ncols = self.N_poles + 1
+
+        # restrict the d_res to be non-zero
+        R22 = R[r12_nrows:, r12_ncols:]
+        
+        R22 = np.vstack([R22, np.zeros((1, r22_ncols))])
+        R22[-1, :-1] = np.real(trival_coeff)
+        R22[-1, -1] = Ns
+
+        # weight the last d_res LS problem
+        weight = np.sqrt(np.linalg.norm(self.Z) / Ns)
+        R22[-1, :] *= weight
+
+        # right-hand side
+        B = np.zeros(r22_nrows + 1)
+        B[-1] = weight * Ns
+        x, residuals, rnk, s_ = np.linalg.lstsq(R22, B, rcond=None)
+        c_res = x[:-1]
+        d_res = x[-1]
+
+        # check if d_res is suited for zeros calculation
+        tol_res = 1e-8
+        if np.abs(d_res) < tol_res:
+            # d_res is too small, discard solution and proceed the |d_res| = tol_res
+            print(f'Replacing d_res solution as it was too small ({d_res}).')
+            d_res = tol_res if d_res > 0 else -tol_res
+
+        # build test matrix H
+        H = np.zeros((self.N_poles, self.N_poles), dtype=complex)
+        for i, (ci, p) in enumerate(zip(self.cindex, self.poles)):
+            if ci == 0:
+                H[i, i] = p
+                H[i] -= c_res / d_res
+            elif ci == 1:
+                x, y = np.real(p), np.imag(p)
+                H[i, i] = H[i + 1, i + 1] = x
+                H[i, i + 1] = -y
+                H[i + 1, i] = y
+                H[i] -= 2 * c_res / d_res
+
+        self.poles = np.linalg.eigvals(H)
+        sorted_indices = np.argsort(self.poles, kind='mergesort')
+        self.poles = self.poles[sorted_indices]
+        unstable = np.real(self.poles) > 0
+        self.poles[unstable] -= 2 * np.real(self.poles)[unstable]
+        
+        return
+
+    def _fit_residues(self, s):
+        """
+        Fit residues of the rational function.
+        """
+
+        Ns = len(s)
+        A = np.zeros((Ns, self.N_poles + 2), dtype=complex)
+        # [c1, c2, ..., cn, d, e]
+        for i, p in enumerate(self.poles):
+            if self.cindex[i] == 0:
+                A[:, i] = 1 / (s - p)
+            elif self.cindex[i] == 1:
+                A[:, i] = 1 / (s - p) + 1 / (s - np.conj(p))
+            elif self.cindex[i] == 2:
+                A[:, i] = 1j / (s - p) - 1j / (s - np.conj(p))
+            else:
+                raise RuntimeError("cindex[%s] = %s" % (i, self.cindex[i]))
+
+
+        if self.d_fit:
+            A[:, self.N_poles] = 1
+        if self.e_fit:
+            A[:, self.N_poles + 1] = s
+        B = self.Z
+
+        A = np.vstack([A.real, A.imag])
+        B = np.hstack([B.real, B.imag])
+
+        x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=None)
+
+        self.residues = np.zeros(self.N_poles, dtype=np.complex64)
+        for i, ci in enumerate(self.cindex):
+            if ci == 0:
+                self.residues[i] = x[i]
+            elif ci == 1:
+                rv, iv = x[i], x[i + 1]
+                self.residues[i] = rv - 1j * iv
+                self.residues[i + 1] = rv + 1j * iv
+
+        if self.d_fit:
+            self.d = np.real(x[self.N_poles])
+        if self.e_fit:
+            self.h = np.real(x[self.N_poles + 1])
+        return
+
+
+
     def _construct_AB_matrices(self, s, stage="pole"):
         """
         Construct the A and B matrices for the linear system Ax = B, ensuring that poles and residues are conjugate pairs.
         """
         Ns = len(s)
         if stage == "pole":
-            if self.relaxed:
-                A = np.zeros((Ns, self.N_poles * 2 + 3), dtype=complex)
-            else:
-                A = np.zeros((Ns, self.N_poles * 2 + 2), dtype=complex)
+            A = np.zeros((Ns, self.N_poles * 2 + 2), dtype=complex)
         else: # stage == "residue"
             A = np.zeros((Ns, self.N_poles + 2), dtype=complex)
-
-        if self.relaxed and stage == "pole":
-            weight = np.sqrt(np.linalg.norm(self.Z) / Ns)
-            # print(f'Weight: {weight}')
-            weight = 1
-
+            
         for i, p in enumerate(self.poles):
             if self.cindex[i] == 0:
                 A[:, i] = 1 / (s - p)
@@ -172,17 +298,14 @@ class VectorFitting:
             # -f(sk) / (sk - ai)
             if stage == "pole":
                 A[:, self.N_poles + 2 + i] = -A[:, i] * self.Z
-
             
         A[:, self.N_poles] = 1
         A[:, self.N_poles + 1] = s
 
-        if self.relaxed and stage == "pole":
-            A[:, self.N_poles + 2] = -weight * self.Z
-
         B = self.Z
         A = np.vstack([A.real, A.imag])
         B = np.hstack([B.real, B.imag])
+        print(A)
 
         return A, B
     
@@ -227,21 +350,8 @@ class VectorFitting:
                 A[i + 1, i] = y
                 B[i] = 2
                 B[i + 1] = 0
-
-        if self.relaxed:
-            d_res = C[-1]
-            # check if d_res is suited for zeros calculation
-            tol_res = 1e-8
-            if np.abs(d_res) < tol_res:
-                # d_res is too small, discard solution and proceed the |d_res| = tol_res
-                print(f'Replacing d_res solution as it was too small ({d_res}).')
-                d_res = tol_res if d_res > 0 else -tol_res
-            print(f'd_res: {d_res}')
-            C_res = C[:-1] / d_res
-        else:
-            C_res = C
         
-        H = np.real(A - np.outer(B, C_res))
+        H = np.real(A - np.outer(B, C))
         self.poles = np.linalg.eigvals(H)
         unstable = np.real(self.poles) > 0
         self.poles[unstable] -= 2 * np.real(self.poles)[unstable]
@@ -283,3 +393,4 @@ class VectorFitting:
         for i in range(self.N_poles):
             f += self.residues[i] / (s - self.poles[i])
         return f
+

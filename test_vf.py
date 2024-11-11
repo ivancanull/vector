@@ -1,11 +1,9 @@
-from matplotlib import lines, tight_layout
 import numpy as np
 import matplotlib.pyplot as plt
 
 from src import *
 
 # Example usage
-
 poles = [
     -4500,
     -41000,
@@ -41,41 +39,72 @@ freq = np.linspace(0, 2e4, 1000)
 s = frequency_to_s(freq)
 fs_value = response(s)
 
-# Initialize and fit VectorFitting instance
+def test_simple_vf():
+    
+    # Initialize and fit VectorFitting instance
+    init_poles = [
+        -1e-2+1j, -1e-2-1j,
+        -111+11100j, -111-11100j,
+        -222+22200j, -222-22200j,
+        -333+33300j, -333-33300j,
+        -444+44400j, -444-44400j,
+        -555+55500j, -555-55500j,
+        -666+66600j, -666-66600j,
+        -777+77700j, -777-77700j,
+        -888+88800j, -888-88800j,
+        -1000+100000j, -1000-100000j
+    ]
 
-init_poles = [
-    -1e-2+1j, -1e-2-1j,
-    -111+11100j, -111-11100j,
-    -222+22200j, -222-22200j,
-    -333+33300j, -333-33300j,
-    -444+44400j, -444-44400j,
-    -555+55500j, -555-55500j,
-    -666+66600j, -666-66600j,
-    -777+77700j, -777-77700j,
-    -888+88800j, -888-88800j,
-    -1000+100000j, -1000-100000j
-]
+    vf = VectorFitting(freq, response, init_poles, max_iter=2, tol=1e-6)
+    vf.set_true_poles_residues(poles, residues, d, h)
 
-vf = VectorFitting(freq, response, init_poles, max_iter=2, tol=1e-6)
-vf.set_true_poles_residues(poles, residues, d, h)
+    vf.fit()
+    fitted_Z = vf.evaluate(s)
 
-vf.fit()
-fitted_Z = vf.evaluate(s)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
+    axes[0].plot(freq, np.real(fs_value), label='True Response', marker='o')
+    axes[0].plot(freq, np.real(fitted_Z), label='Fitted Response', linestyle='dashed')
+    axes[1].plot(freq, np.imag(fs_value), label='True Response', marker='o')
+    axes[1].plot(freq, np.imag(fitted_Z), label='Fitted Response', linestyle='dashed')
+    axes[2].plot(freq, 20 * np.log10(np.abs(fs_value)), label='True Response', marker='o')
+    axes[2].plot(freq, 20 * np.log10(np.abs(fitted_Z)), label='Fitted Response', linestyle='dashed')
+    for ax in axes:
+        ax.set_xlabel('Frequency (Hz)')
+    axes[0].set_ylabel('Real')
+    axes[1].set_ylabel('Imag')
+    axes[2].set_ylabel("Magnitude (dB)")
+
+    plt.legend()
+    plt.savefig("test_vf.pdf")
+
+def test_vf_with_poles_init():
+    np.set_printoptions(precision=3)
+    initializer = BasicPolesInitializer(freqs_range=(1, 2e4), n_poles_real=2, n_poles_complex=8)
+    init_poles = initializer.initialize(scale="log")
+
+    vf = VectorFitting(freq, response, init_poles, max_iter=10, tol=1e-6, relaxed=True)
+    vf.set_true_poles_residues(poles, residues, d, h)
+
+    vf.fit()
+    fitted_Z = vf.evaluate(s)
+    
+    fig, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
+    axes[0].plot(freq, np.real(fs_value), label='True Response', marker='o')
+    axes[0].plot(freq, np.real(fitted_Z), label='Fitted Response', linestyle='dashed')
+    axes[1].plot(freq, np.imag(fs_value), label='True Response', marker='o')
+    axes[1].plot(freq, np.imag(fitted_Z), label='Fitted Response', linestyle='dashed')
+    axes[2].plot(freq, 20 * np.log10(np.abs(fs_value)), label='True Response', marker='o')
+    axes[2].plot(freq, 20 * np.log10(np.abs(fitted_Z)), label='Fitted Response', linestyle='dashed')
+    for ax in axes:
+        ax.set_xlabel('Frequency (Hz)')
+    axes[0].set_ylabel('Real')
+    axes[1].set_ylabel('Imag')
+    axes[2].set_ylabel("Magnitude (dB)")
+
+    plt.legend()
+    plt.savefig("test_vf.pdf")
+    plt.savefig("test_vf.png")
 
 
-fig, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
-axes[0].plot(freq, np.real(fs_value), label='True Response', marker='o')
-axes[0].plot(freq, np.real(fitted_Z), label='Fitted Response', linestyle='dashed')
-axes[1].plot(freq, np.imag(fs_value), label='True Response', marker='o')
-axes[1].plot(freq, np.imag(fitted_Z), label='Fitted Response', linestyle='dashed')
-axes[2].plot(freq, 20 * np.log10(np.abs(fs_value)), label='True Response', marker='o')
-axes[2].plot(freq, 20 * np.log10(np.abs(fitted_Z)), label='Fitted Response', linestyle='dashed')
-for ax in axes:
-    ax.set_xlabel('Frequency (Hz)')
-axes[0].set_ylabel('Real')
-axes[1].set_ylabel('Imag')
-axes[2].set_ylabel("Magnitude (dB)")
-
-plt.legend()
-plt.savefig("test_vf.pdf")
-
+if __name__ == "__main__":
+    test_vf_with_poles_init()
