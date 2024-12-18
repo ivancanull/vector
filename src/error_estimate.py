@@ -2,7 +2,7 @@ import re
 import numpy as np
 from .utils import get_cindex
 
-__all__ = ["fitted_error_estimate", "poles_residues_error_estimate"]
+__all__ = ["fitted_error_estimate", "poles_residues_error_estimate", "poles_sorting"]
 
 def fitted_error_estimate(Z, Z_fit, method="RMSE"):
     """
@@ -41,8 +41,8 @@ def poles_residues_error_estimate(poles, residues, d, h, poles_fit, residues_fit
     """
 
     # sort the poles and residues in ascending order of real part
-    poles, residues = _poles_sorting(poles, residues)
-    poles_fit, residues_fit = _poles_sorting(poles_fit, residues_fit)
+    poles, residues = poles_sorting(poles, residues)
+    poles_fit, residues_fit = poles_sorting(poles_fit, residues_fit)
 
     if method == "Error":
         poles_error = poles - poles_fit
@@ -55,7 +55,7 @@ def poles_residues_error_estimate(poles, residues, d, h, poles_fit, residues_fit
     else:
         raise ValueError("Invalid method. Choose from 'Error', 'Sort'.")
     
-def _poles_sorting(poles, residues):
+def poles_sorting(poles, residues):
     """
     Sort the poles in ascending order of real part of the poles. Since the poles are real or conjugate pairs, the sorting of conjugate pairs is done with positive real part first.
     

@@ -3,8 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 
-
-
 def rational_func(s, poles, residues, d=0):
     return np.sum(residues / (s[:, None] - poles), axis=1) + d
 
