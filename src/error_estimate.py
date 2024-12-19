@@ -6,7 +6,7 @@ __all__ = ["fitted_error_estimate", "poles_residues_error_estimate", "poles_sort
 
 def fitted_error_estimate(Z, Z_fit, method="RMSE"):
     """
-    Calculate the error estimate between the fitted and original impedance. The error calculation method is Root Mean Square Error (RMSE). 
+    Calculate the error estimate between the fitted and original impedance. The default error calculation method is Root Mean Square Error (RMSE). 
     
     Parameters:
     - Z: The original impedance.
@@ -17,6 +17,8 @@ def fitted_error_estimate(Z, Z_fit, method="RMSE"):
     """
     if method == "RMSE":
         return np.sqrt(np.mean((np.abs(Z - Z_fit))**2))
+    elif method == "RE":
+        return np.abs(Z - Z_fit) / np.abs(Z_fit)
     else:
         raise ValueError("Invalid method. Choose from 'RMSE'.")
 

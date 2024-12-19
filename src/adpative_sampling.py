@@ -3,7 +3,7 @@ from re import DEBUG
 from matplotlib.style import available
 from triton import heuristics
 from .poles_init import basic_poles_initialize
-from .vector_fitting import vector_fit, evaluate
+from .vector_fitting import vector_fit, evaluate, print_params, get_cindex
 from .error_estimate import fitted_error_estimate
 from .utils import frequency_to_s, add_frequency_point_on_have, map_to_available_freq
 from .complex_func import ComplexFunction, FunctionFromTouchstone
@@ -32,26 +32,22 @@ def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_
     convergence = False
     nF, respnF = 4, 100
 
-    freq = np.linspace(fmin, fmax, nF)
-    respfreq = np.linspace(fmin, fmax, respnF)
-    
-    
+    freq = np.linspace(fmin, fmax, nF)    
 
     # if Z is a FunctionFromTouchstone, map the frequency points to the available frequency points
     if isinstance(Z, FunctionFromTouchstone):
-        available_freq = Z.freq
-        resps = frequency_to_s(map_to_available_freq(respfreq, available_freq))
+        respfreq = Z.freq
+        respnF = len(respfreq)
     # if Z is a ComplexFunction, the available frequency points are the same as the response frequency points
     elif isinstance(Z, ComplexFunction):
-        available_freq = respfreq
+        respfreq = np.linspace(fmin, fmax, respnF)
     else:
         raise ValueError("Z must be a FunctionFromTouchstone or ComplexFunction")
 
-    freq = map_to_available_freq(freq, available_freq)
+    freq = map_to_available_freq(freq, respfreq)
     if nF != len(freq):
         raise ValueError("Available frequency points are not enough")
     
-    respnF = len(respfreq)
     resps = frequency_to_s(respfreq)
 
     while not convergence:
@@ -144,7 +140,7 @@ def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_
             added = False
             while not added and len(idx) > 0:
                 new_freq = respfreq[idx[0]]
-                added, freq = add_frequency_point_on_have(freq, available_freq, new_freq)
+                added, freq = add_frequency_point_on_have(freq, respfreq, new_freq)
                 if not added:
                     idx = idx[1:]
                     # if DEBUG:
@@ -155,7 +151,34 @@ def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_
             nF = len(freq)
             if DEBUG:
                 print("Number of frequency points: ", nF)
+    
+    # final test
+    if DEBUG:
+        
 
+        Z_fit = evaluate(best_ser["poles"], best_ser["residues"], best_ser["d"], best_ser["h"], resps)
+        Zs = Z(resps)
+        error = fitted_error_estimate(Z=Zs, Z_fit=Z_fit)
+        print_params(cindex=get_cindex(best_ser["poles"]), poles=best_ser["poles"], residues=best_ser["residues"], d=best_ser["d"], h=best_ser["h"])
+        print("Final RMSE: ", error)
+
+        _, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
+        axes[0].plot(respfreq, np.real(Zs), label='True Response', marker='o')
+        axes[1].plot(respfreq, np.imag(Zs), label='True Response', marker='o')
+        axes[2].plot(respfreq, 20 * np.log10(np.abs(Zs)), label='True Response', marker='o') 
+        axes[0].plot(respfreq, np.real(Z_fit), label='Fitted Response', linestyle='dashed')
+        axes[1].plot(respfreq, np.imag(Z_fit), label='Fitted Response', linestyle='dashed')
+        axes[2].plot(respfreq, 20 * np.log10(np.abs(Z_fit)), label='Fitted Response', linestyle='dashed')
+        for ax in axes:
+            ax.set_xlabel('Frequency (Hz)')
+        axes[0].set_ylabel('Real')
+        axes[1].set_ylabel('Imag')
+        axes[2].set_ylabel("Magnitude (dB)")
+        plt.legend()
+        plt.savefig(f"test_afs/test_afs_nF_final_{nF}.png")
+        plt.cla()
+    
+    return best_ser, second_best_ser
             
     
                     
