@@ -1,7 +1,8 @@
-from calendar import c
+from ast import List
 import numpy as np
+from typing import Tuple
 
-def is_real(pole):
+def is_real(pole, atol=1e-12, rtol=1e-12):
     """
     Check if a given pole is real.
     
@@ -11,7 +12,7 @@ def is_real(pole):
     Returns:
     - True if the pole is real, False otherwise.
     """
-    return np.isclose(pole.imag, 0)
+    return np.isclose(pole.imag, 0, atol=atol, rtol=rtol)
 
 def frequency_to_s(frequency):
     """
@@ -57,3 +58,67 @@ def get_cindex(poles, tol=1e-12):
         else:
             i += 1
     return cindex
+
+def add_frequency_point_on_have(have_freq: np.ndarray, available_freq: np.ndarray, add_freq: float) -> Tuple[bool, np.ndarray]:
+    """
+    Add a frequency point on the available frequency points.
+    
+    Parameters:
+    - have_freq: The frequency points that are already sampled.
+    - available_freq: The available frequency points.
+    - add_freq: The frequency point to be added.
+
+    Returns:
+    - Whether the frequency point is added or not.
+    - The updated available frequency points.
+    """
+    # map the frequency point to the available frequency points
+    mapped_add_freq = map_to_available_freq(add_freq, available_freq)
+    # check if the frequency is already in have_freq
+    if check_freq_sampled_already(have_freq, mapped_add_freq):
+        return False, have_freq
+    else:
+        return True, np.sort(np.append(have_freq, mapped_add_freq))
+    
+def check_freq_sampled_already(have_freq: np.ndarray | List, freq: float, tol=1e-6):
+    """
+    Check if a frequency point is already sampled.
+    
+    Parameters:
+    - have_freq: The frequency points that are already sampled.
+    - freq: The frequency point to be checked.
+    - tol: The tolerance to be used in the comparison.
+    
+    Returns:
+    - True if the frequency point is already sampled, False otherwise.
+    """
+    if isinstance(have_freq, List):
+        have_freq = np.array(have_freq)
+    return np.any(np.isclose(have_freq, freq, atol=tol))
+
+def map_to_available_freq(have_freq: np.ndarray | float, available_freq: np.ndarray) -> np.ndarray | float:
+    """
+    Map the available frequency points to the frequency points that are already sampled.
+    
+    Parameters:
+    - have_freq: The frequency points that are already sampled.
+    - available_freq: The available frequency points.
+    
+    Returns:
+    - The available frequency points that are not already sampled.
+    """
+    mapped_freq = []
+    if isinstance(have_freq, float):
+        idx = np.argmin(np.abs(available_freq - have_freq))
+        return available_freq[idx]
+    elif isinstance(have_freq, np.ndarray):
+        for i, freq in enumerate(have_freq):
+            idx = np.argmin(np.abs(available_freq - freq))
+            if not check_freq_sampled_already(mapped_freq, available_freq[idx]):
+                mapped_freq.append(available_freq[idx])
+        # sort the mapped frequency points
+        mapped_freq = np.sort(np.array(mapped_freq))
+        return mapped_freq
+    else:
+        raise ValueError("Invalid type for have_freq")
+        

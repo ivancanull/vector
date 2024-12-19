@@ -5,7 +5,7 @@ from .utils import frequency_to_s, get_cindex, is_real
 from .error_estimate import poles_residues_error_estimate, fitted_error_estimate, poles_sorting
 from .complex_func import FunctionAbstract
 
-DEBUG = True
+VF_DEBUG = False
 __all__ = ["VectorFitting", "vector_fit", "evaluate"]
 
 class VectorFitting:
@@ -134,7 +134,7 @@ class VectorFitting:
                 x, residuals, rnk, s_ = np.linalg.lstsq(A, B, rcond=1e-10)
                 self._update_parameters_residue(x)
 
-            if DEBUG:
+            if VF_DEBUG:
                 print('-' * 50)
                 print(f'Iteration {iteration + 1}')
                 if self.true_poles_set:
@@ -402,7 +402,7 @@ class VectorFitting:
             f += self.residues[i] / (s - self.poles[i])
         return f
 
-def get_cindex(poles):
+def get_cindex(poles, atol=1e-12, rtol=1e-12):
     """
     Get the cindex array for the given poles. Assert that complex poles come in real values or conjugate pairs.
     """
@@ -410,8 +410,8 @@ def get_cindex(poles):
     cindex = np.zeros(N)
     i = 0
     while i < N:
-        if not is_real(poles[i]):
-            assert np.allclose(np.conj(poles[i]), poles[i+1]) , ("Complex poles must come in conjugate pairs: %s, %s" % (poles[i], poles[i+1]))
+        if not is_real(poles[i], atol=atol, rtol=rtol):
+            assert np.allclose(np.conj(poles[i]), poles[i+1]) , ("Complex poles must come in conjugate pairs: %s, %s" % (poles[i], poles[i+1]), '\n', 'All poles:', poles)
             cindex[i] = 1
             cindex[i+1] = 2
             i += 2
@@ -419,14 +419,14 @@ def get_cindex(poles):
             i += 1
     return cindex
 
-def sort_poles_residues(poles, residues=None):
+def sort_poles_residues(poles, residues=None, atol=1e-12, rtol=1e-12):
     """
     Sort the poles and residues in ascending order of real part.
     """
     # put the real poles first
-    condition = is_real(poles)
+    condition = is_real(poles, atol=atol, rtol=rtol)
     # sort the real poles
-    real_poles = poles[condition]
+    real_poles = poles[condition].real # force the poles to be real
     complex_poles = poles[~condition]
     if residues is not None:
         real_residues = residues[condition]
@@ -484,8 +484,9 @@ def vector_fit(freq,
                Z, 
                init_poles, 
                max_iter=100, 
-               tol=1e-6, 
-               relaxed=False, 
+               tol=1e-8, 
+               atol=1e-12,
+               rtol=1e-12,
                d_fit=True, 
                h_fit=True,
                auto_scale=True) -> Tuple[np.ndarray, np.ndarray, float, float]:
@@ -525,12 +526,11 @@ def vector_fit(freq,
         s_scale = np.max(freq) / (2 * np.pi)
         s = s / s_scale
         poles = poles / s_scale
-        print(f'Scaling poles and frequency by {s_scale}.')
 
     for _ in range(max_iter):
 
-        poles = sort_poles_residues(poles)
-        cindex = get_cindex(poles)
+        poles = sort_poles_residues(poles, atol=atol, rtol=rtol)
+        cindex = get_cindex(poles, atol=atol, rtol=rtol)
 
         # stage 1: poles and zeros identification
         A = np.zeros((Ns, N_poles * 2 + 3), dtype=complex)
@@ -586,11 +586,10 @@ def vector_fit(freq,
         d_res = x[-1]
 
         # check if d_res is suited for zeros calculation
-        tol_res = 1e-8
-        if np.abs(d_res) < tol_res:
+        if np.abs(d_res) < tol:
             # d_res is too small, discard solution and proceed the |d_res| = tol_res
             print(f'Replacing d_res solution as it was too small ({d_res}).')
-            d_res = tol_res if d_res > 0 else -tol_res
+            d_res = tol if d_res > 0 else -tol
 
         # build test matrix H
         H = np.zeros((N_poles, N_poles), dtype=complex)
@@ -656,7 +655,7 @@ def vector_fit(freq,
         if h_fit:
             h = h / s_scale
     
-    if DEBUG:
+    if VF_DEBUG:
         print_params(cindex, poles, residues, d, h)
         Z_fit = evaluate(poles, residues, d, h, s)
         rms_error = fitted_error_estimate(Z, Z_fit, method="RMSE")

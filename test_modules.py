@@ -85,13 +85,19 @@ def test_init_poles():
 
 def test_touchstone():
     Z = read_touchstone()
-    freq = np.arange(3, 4.21, 0.1) * 1e9
+    freq = np.arange(3, 4.21, 0.01) * 1e9
     s = frequency_to_s(freq)
     values = Z(s)
     S11 = values
 
+    init_poles = basic_poles_initialize(freqs_range=(3.0e9, 4.2e9), n_poles_real=0, n_poles_complex=1)
+
+    poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, Z, init_poles, max_iter=50, tol=1e-6, relaxed=True)
+    Z_fit = evaluate(poles_fit, poles_residues, poles_d, poles_h, s)          
+
     fig, ax = plt.subplots(1, 1, figsize=(12, 9), tight_layout=True)
     ax.plot(freq, 20 * np.log10(np.abs(S11)), label='True Response', marker='o')
+    ax.plot(freq, 20 * np.log10(np.abs(Z_fit)), label='Fitted Response', linestyle='dashed')
     ax.set_xlabel('Frequency (Hz)')
 
     ax.set_ylabel("Magnitude (dB)")
@@ -101,8 +107,7 @@ def test_touchstone():
 
 def test_afs():
     Z = read_touchstone()
-
-    GiulioAFS(Z, 3e9, 4.2e9, n_min=2, n_max=25, tol_order=1e-6)
+    GiulioAFS(Z, 3e9, 4.2e9, n_min=2, n_max=10, tol_error=1e-4, heuristics_tol_error=[1e-4, 1e-4, 1e-4, 1e-4])
 
 def test_vf():
     freq = np.linspace(0, 2e4, 1000)
@@ -170,6 +175,6 @@ def test_scale():
 if __name__ == "__main__":
     # test_touchstone()
     # test_complex_reshape()    
-    # test_afs()
     test_afs()
+    # test_afs()
 

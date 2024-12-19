@@ -82,6 +82,7 @@ class FunctionFromTouchstone(FunctionAbstract):
         self.parser = TorchstoneParser(port_num=port_num)
         self.data = self.parser.parse(filename)
         self.port_combinations = port_combinations
+        self.freq = np.array(self.data['freq'])
 
     def evaluate(self, s):
         """
@@ -94,10 +95,8 @@ class FunctionFromTouchstone(FunctionAbstract):
         - The value of the function at s or an array of values if s is an array
         """
 
-
         # find the closest frequency in the touchstone data
-        freq = np.array(self.data['freq'])
-        idx = np.argmin(np.abs(freq - s_to_frequency(s)))
+        idx = np.argmin(np.abs(self.freq - s_to_frequency(s)))
         values = np.zeros((self.parser.port_num, self.parser.port_num), dtype=complex)
         for i in range(self.parser.port_num):
             for j in range(self.parser.port_num):
@@ -113,6 +112,7 @@ class FunctionFromTouchstone(FunctionAbstract):
             return values
         else:
             return values[self.port_combinations[0], self.port_combinations[1]]
+        
     def __call__(self, s):
         """
         Makes the instance callable, so you can use the instance like a function.
