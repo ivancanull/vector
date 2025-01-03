@@ -2,7 +2,7 @@ from src.touchstone import *
 from src.complex_func import *
 from src.utils import *
 from src.poles_init import *
-from src.adpative_sampling import *
+from src.afs import *
 from src.vector_fitting import *
 
 import numpy as np
@@ -169,7 +169,7 @@ def test_vf():
     s = frequency_to_s(freq)
     response = ComplexFunction(poles, residues, d, h)
     init_poles = basic_poles_initialize(freqs_range=(1, 2e4), n_poles_real=2, n_poles_complex=8)
-    poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, response, init_poles, max_iter=10, tol=1e-6, relaxed=True)
+    poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, response, init_poles, max_iter=10, tol=1e-6)
     Z = response(s)
     Z_fit = evaluate(poles_fit, poles_residues, poles_d, poles_h, s)
 
@@ -226,9 +226,18 @@ def test_scale():
     plt.savefig("test_vf_scale.pdf")
     plt.savefig("test_vf_scale.png")
 
+def test_lbvf():
+    # Z = read_touchstone()
+    freq = np.linspace(0, 2e4, 1000)
+    s = frequency_to_s(freq)
+    response = ComplexFunction(poles, residues, d, h)
+    SimonBayesianAFS(Z=response, fmin=1, fmax=2e4, sample_size=10)
+
 
 if __name__ == "__main__":
-    test_touchstone()
+    # test_touchstone()
     # test_complex_reshape()    
-    test_afs()
+    # test_afs()
+    test_lbvf()
+    # test_vf()
 

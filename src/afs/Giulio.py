@@ -1,12 +1,8 @@
-from re import DEBUG
-
-from matplotlib.style import available
-from triton import heuristics
-from .poles_init import basic_poles_initialize
-from .vector_fitting import vector_fit, evaluate, print_params, get_cindex
-from .error_estimate import fitted_error_estimate
-from .utils import frequency_to_s, add_frequency_point_on_have, map_to_available_freq
-from .complex_func import ComplexFunction, FunctionFromTouchstone
+from ..poles_init import basic_poles_initialize
+from ..vector_fitting import vector_fit, evaluate, print_params, get_cindex
+from ..error_estimate import fitted_error_estimate
+from ..utils import frequency_to_s, add_frequency_point_on_have, map_to_available_freq
+from ..complex_func import ComplexFunction, FunctionFromTouchstone
 import numpy as np
 import matplotlib.pyplot as plt
 

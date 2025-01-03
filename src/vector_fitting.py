@@ -480,6 +480,84 @@ def evaluate(poles, residues, d, h, s):
         f += residues[i] / (s - poles[i])
     return f
 
+def construct_AB_matrices(s, cindex, poles, Z):
+    """
+    Construct the A and B matrices for the linear system Ax = B, ensuring that poles and residues are conjugate pairs.
+    """
+    Ns = len(s)
+    N_poles = len(poles)
+
+    A = np.zeros((Ns, N_poles * 2 + 2), dtype=complex)
+        
+    for i, p in enumerate(poles):
+        if cindex[i] == 0:
+            A[:, i] = 1 / (s - p)
+        elif cindex[i] == 1:
+            A[:, i] = 1 / (s - p) + 1 / (s - np.conj(p))
+        elif cindex[i] == 2:
+            A[:, i] = 1j / (s - p) - 1j / (s - np.conj(p))
+        else:
+            raise RuntimeError("cindex[%s] = %s" % (i, cindex[i]))
+        
+        # -f(sk) / (sk - ai)
+        A[:, N_poles + 2 + i] = -A[:, i] * Z
+        
+    A[:, N_poles] = 1
+    A[:, N_poles + 1] = s
+
+    B = Z
+    A = np.vstack([A.real, A.imag])
+    B = np.hstack([B.real, B.imag])
+
+    # # sum up the real of the poles for future use
+    # trival_coeff = np.sum(A[:, :N_poles].real, axis=0)
+
+    # Q, R = np.linalg.qr(A, mode='qr')
+    # dim_k = min(2 * Ns, N_poles * 2 + 2)
+    # if dim_k < N_poles * 2 + 2:
+    #     r12_nrows = Ns
+    #     r22_nrows = Ns
+    # else:
+    #     r12_nrows = N_poles + 2
+    #     r22_nrows = N_poles
+    # r12_ncols = N_poles + 2
+    # r22_ncols = N_poles
+
+    # # restrict the d_res to be non-zero
+    # R22 = R[r12_nrows:, r12_ncols:]
+        
+    # R22 = np.vstack([R22, np.zeros((1, r22_ncols))])
+    # R22[-1, :-1] = np.real(trival_coeff)
+    # R22[-1, -1] = Ns
+
+    # # weight the last d_res LS problem
+    # weight = np.sqrt(np.linalg.norm(Z) / Ns)
+    # R22[-1, :] *= weight
+
+    return A, B
+
+def calculate_zeros(poles, cindex, C):
+    """
+    Calculate the zeros of the rational function.
+    """
+    N_poles = len(poles)
+    A = np.diag(poles)
+    B = np.ones(N_poles)
+    for i, (ci, p) in enumerate(zip(cindex, poles)):
+        if ci == 1:
+            x, y = np.real(p), np.imag(p)
+            A[i, i] = A[i + 1, i + 1] = x
+            A[i, i + 1] = -y
+            A[i + 1, i] = y
+            B[i] = 2
+            B[i + 1] = 0
+    
+    H = np.real(A - np.outer(B, C))
+    poles = np.linalg.eigvals(H)
+    unstable = np.real(poles) > 0
+    poles[unstable] -= 2 * np.real(poles)[unstable]
+    return poles
+
 def vector_fit(freq, 
                Z, 
                init_poles, 
@@ -489,7 +567,8 @@ def vector_fit(freq,
                rtol=1e-12,
                d_fit=True, 
                h_fit=True,
-               auto_scale=True) -> Tuple[np.ndarray, np.ndarray, float, float]:
+               auto_scale=True,
+               only_poles=False) -> Tuple[np.ndarray, np.ndarray, float, float]:
     """
     Fit a rational function to the given data using the Vector Fitting algorithm.
     
@@ -503,6 +582,7 @@ def vector_fit(freq,
     - d_fit: Whether to fit the d parameter.
     - h_fit: Whether to fit the e parameter.
     - auto_scale: Whether to automatically scale the poles and residues.
+    - only_poles: Whether to only fit the poles.
     
     Returns:
     - The fitted poles, residues, d, and h values.
@@ -598,8 +678,8 @@ def vector_fit(freq,
                 H[i, i] = p
                 H[i] -= c_res / d_res
             elif ci == 1:
-                x, y = np.real(p), np.imag(p)
-                H[i, i] = H[i + 1, i + 1] = x
+                x_, y = np.real(p), np.imag(p)
+                H[i, i] = H[i + 1, i + 1] = x_
                 H[i, i + 1] = -y
                 H[i + 1, i] = y
                 H[i] -= 2 * c_res / d_res
@@ -610,6 +690,10 @@ def vector_fit(freq,
         poles[unstable] -= 2 * np.real(poles)[unstable]
         
     poles = sort_poles_residues(poles)
+
+    if only_poles:
+        return poles, x, R22, B
+    
     # stage 2: residue identification
     A = np.zeros((Ns, N_poles + 2), dtype=complex)
     # [c1, c2, ..., cn, d, e]
