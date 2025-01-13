@@ -1,5 +1,4 @@
-from ast import Lambda
-from matplotlib import scale, tight_layout
+from turtle import up
 from ..poles_init import basic_poles_initialize
 from ..vector_fitting import vector_fit, evaluate, print_params, get_cindex
 from ..error_estimate import fitted_error_estimate
@@ -7,75 +6,62 @@ from ..utils import frequency_to_s, add_frequency_point_on_have, map_to_availabl
 from ..complex_func import ComplexFunction, FunctionFromTouchstone
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import multivariate_t
+from scipy.stats import multivariate_t, multivariate_normal, invgamma
 from ..complex_func import FunctionAbstract
 from ..vector_fitting import sort_poles_residues, construct_AB_matrices, calculate_zeros
 import pymc as pm
 
 DEBUG = True
 
-def sample_r_d(freq, 
-               Z, 
-               init_poles, 
-               max_iter=100, 
-               tol=1e-8, 
-               atol=1e-12,
-               rtol=1e-12,
-               d_fit=True, 
-               h_fit=True,
-               auto_scale=True,
-               only_poles=False):
-    """
-    Fit a rational function to the given data using the Vector Fitting algorithm.
-    
-    Parameters:
-    - freq: An array of frequency values (Hz).
-    - Z: An array of complex f(s) values at the frequency points | ComplexFunction instance which represemts f(s).
-    - init_poles: Initial poles provided by the user.
-    - max_iter: The maximum number of iterations for the fitting process.
-    - tol: The convergence tolerance.
-    - relaxed: Whether to use d residues in Gustavsen's relocating method.
-    - d_fit: Whether to fit the d parameter.
-    - h_fit: Whether to fit the e parameter.
-    - auto_scale: Whether to automatically scale the poles and residues.
-    - only_poles: Whether to only fit the poles.
-    
-    Returns:
-    - The fitted poles, residues, d, and h values.
-    """
+def sample_r_d(A, B, x, sample_size):
+    if B.ndim == 1:
+        B = B[:, None]
+        nB = B.shape[0]
+    n, p = A.shape # A: (n, p), x: (p, 1), B: (n, 1)
+    x0 = np.zeros((p, 1))
+    Lambda0 = np.eye(p) * 1e-6
+    alpha0 = 0
+    beta0 = 0
 
-    d = 0
-    h = 0
-    N_poles = len(init_poles)
-    poles = init_poles.copy()
-    s = frequency_to_s(freq)
-    Ns = len(s)
-
-    # if Z is a given callable ComplexFunction instance, evaluate it at the frequency points
-    if isinstance(Z, FunctionAbstract):
-        Z = Z(s)
+    # calculate the posterior distribution
+    Lambda_f = Lambda0 + A.T @ A # (p, p)
+    Lambda_f_inv = np.linalg.inv(Lambda_f)
+    # check if Lambda_f is symmetric positive-semidefinite
+    eigenvalues = np.linalg.eigvals(Lambda_f_inv)
+    if np.all(eigenvalues > 0):
+        print("Lambda_f is positive definite.")
     else:
-        Z = Z
+        print("Lambda_f is NOT positive definite.")
+        Lambda_f_inv = 0.5 * (Lambda_f_inv + Lambda_f_inv.T) 
 
-    if auto_scale:
-        # scale the s-domain by the maximum frequency
-        s_scale = np.max(freq) / (2 * np.pi)
-        s = s / s_scale
-        poles = poles / s_scale
+    x_f = Lambda_f_inv @ (Lambda0 @ x0 + A.T @ B) # (p, 1)
+    alpha_f = alpha0 + nB / 2
+    beta_f = beta0 + 0.5 * (B.T @ B - x_f.T @ Lambda_f @ x_f + x0.T @ Lambda0 @ x0)
 
-    poles = sort_poles_residues(poles, atol=atol, rtol=rtol)
-    cindex = get_cindex(poles, atol=atol, rtol=rtol)
+    sigma_sq_samples = invgamma.rvs(a=alpha_f, scale=beta_f, size=sample_size)
+    print("sigma_sq_samples: ", sigma_sq_samples)
 
-    # stage 1: poles and zeros identification
-    A, B = construct_AB_matrices(s, cindex, poles, Z)
-    cindex = get_cindex(poles, atol=atol, rtol=rtol)
-    x = np.linalg.lstsq(A, B, rcond=None)[0]
-    print("x: ", x)
-    N_poles = len(poles)
-    poles = calculate_zeros(poles, cindex, x[N_poles+2:])
-    print("poles: ", poles)
-    return A, B, x
+    x_samples = []
+    for sigma_sq in sigma_sq_samples:
+        cov_matrix = sigma_sq * Lambda_f_inv
+        # # cov_matrix_sym_pos_semidefi = 0.5 * (cov_matrix + cov_matrix.T)
+        # cov_matrix_sym_pos_semidefi = cov_matrix + 1e-8 * np.eye(cov_matrix.shape[0])
+        x_sample = multivariate_normal.rvs(mean=x_f.flatten(), cov=cov_matrix)
+        x_samples.append(x_sample)
 
+    return np.array(x_samples)
+
+
+    # calculate the covariance matrix
+    df = 2 * alpha_f
+    scale_inv = alpha_f / beta_f[0, 0] * Lambda_f
+    print("scale_inv: ", scale_inv)
+    scale = np.linalg.inv(alpha_f / beta_f[0, 0] * Lambda_f)
+    
+    dist = multivariate_t(df=df, loc=x_f.flatten(), shape=scale)
+    x_samples = dist.rvs(size=sample_size)
+    return x_samples
+        
 def SimonBayesianAFS(Z, fmin: float, fmax: float, threshold: float = 0.1, sample_size: int = 500):
     """
     A Bayesian Approach to Adaptive Frequency Sampling implemented in Simon De Ridder et al.'s paper.
@@ -110,11 +96,36 @@ def SimonBayesianAFS(Z, fmin: float, fmax: float, threshold: float = 0.1, sample
     Zs = Z(resps)
     poles_num_max = 20
 
+    order = 6
+    init_poles = basic_poles_initialize((fmin, fmax), 0 if order % 2 == 0 else 1, order // 2, scale="linear")
+    A, B, x = vector_fit(freq, Z, init_poles, max_iter=1, tol=1e-8, atol=1e-6, method="SimonAFS")
+
+    print("x: ", x)
+    print("A: ", A)
+    print("B: ", B)
+
+    x_samples = sample_r_d(A, B, x, sample_size=100)
+    print(x_samples.shape)
+
+    # plot error bars
     if DEBUG:
-        _, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
-        axes[0].plot(respfreq, np.real(Zs), label='True Response', marker='o')
-        axes[1].plot(respfreq, np.imag(Zs), label='True Response', marker='o')
-        axes[2].plot(respfreq, 20 * np.log10(np.abs(Zs)), label='True Response', marker='o') 
+        fig, axes = plt.subplots(figsize=(8, 6))
+        x_ax = np.arange(1, len(x) + 1)
+        # 
+        parts = axes.violinplot(x_samples,
+                        showmeans=False, showmedians=False, showextrema=False)
+        for pc in parts['bodies']:
+            pc.set_facecolor('#D43F3A')
+            pc.set_edgecolor('black')
+            pc.set_alpha(1)
+        axes.scatter(x_ax, x, marker='o',)
+        axes.set_xlabel('Pole index')
+        axes.set_ylabel('Residue')
+        # axes.set_ylim(bottom=min(np.min(x), np.min(x_samples)), top=max(np.max(x), np.max(x_samples)))
+        axes.set_title('Residues with error bars')
+        plt.savefig('test_lbvf_error_bars.png')
+
+    return
 
     for order in range(min(nF + 1, poles_num_max - 1), min(nF + 1, poles_num_max)):
         s = frequency_to_s(freq)
