@@ -1,10 +1,10 @@
 import re
 import numpy as np
-from .utils import get_cindex
+from .utils import get_cindex, sort_poles_residues
 
-__all__ = ["fitted_error_estimate", "poles_residues_error_estimate", "poles_sorting"]
+__all__ = ["fitted_error_estimate", "poles_residues_error_estimate"]
 
-def fitted_error_estimate(Z, Z_fit, method="RMSE"):
+def fitted_error_estimate(Z, Z_fit, method="RMSE", **kwargs):
     """
     Calculate the error estimate between the fitted and original impedance. The default error calculation method is Root Mean Square Error (RMSE). 
     
@@ -15,10 +15,32 @@ def fitted_error_estimate(Z, Z_fit, method="RMSE"):
     Returns:
     - The error estimate.
     """
-    if method == "RMSE":
+    if method == "MAE": # Mean Absolute Error
+        return np.mean(np.abs(Z - Z_fit))
+    elif method == "MSE": # Mean Square Error
+        return np.mean((np.abs(Z - Z_fit))**2)
+    elif method == "RMSE":
         return np.sqrt(np.mean((np.abs(Z - Z_fit))**2))
-    elif method == "RE":
-        return np.abs(Z - Z_fit) / np.abs(Z_fit)
+    elif method == "NRMSE": # Normalized Root Mean Square Error
+        norm = kwargs["norm"] if "norm" in kwargs else "range"
+        rmse = np.sqrt(np.mean((np.abs(Z - Z_fit))**2))
+        # Normalize RMSE based on the chosen method
+        if norm == "range":
+            return rmse / (np.max(np.abs(Z)) - np.min(np.abs(Z)))
+        elif norm == "mean":
+            return rmse / np.mean(np.abs(Z))
+        elif norm == "std":
+            return rmse / np.std(np.abs(Z))
+        else:
+            raise ValueError(f"Unknown normalization method: {norm}")
+    elif method == "R-squared":
+        SS_res = np.sum((np.abs(Z - Z_fit)) ** 2)
+        SS_tot = np.sum((np.abs(Z) - np.mean(np.abs(Z))) ** 2)
+        return 1 - (SS_res / SS_tot)
+    elif method == "MReE": # Mean Relative Error
+        return np.mean(np.abs((Z - Z_fit) / np.abs(Z)))
+    elif method == "MxReE": # Maximum Relative Error
+        return np.max(np.abs((Z - Z_fit) / np.abs(Z)))
     else:
         raise ValueError("Invalid method. Choose from 'RMSE'.")
 
@@ -43,8 +65,8 @@ def poles_residues_error_estimate(poles, residues, d, h, poles_fit, residues_fit
     """
 
     # sort the poles and residues in ascending order of real part
-    poles, residues = poles_sorting(poles, residues)
-    poles_fit, residues_fit = poles_sorting(poles_fit, residues_fit)
+    poles, residues = sort_poles_residues(poles, residues)
+    poles_fit, residues_fit = sort_poles_residues(poles_fit, residues_fit)
 
     if method == "Error":
         poles_error = poles - poles_fit
@@ -56,28 +78,3 @@ def poles_residues_error_estimate(poles, residues, d, h, poles_fit, residues_fit
         return poles, residues, poles_fit, residues_fit
     else:
         raise ValueError("Invalid method. Choose from 'Error', 'Sort'.")
-    
-def poles_sorting(poles, residues):
-    """
-    Sort the poles in ascending order of real part of the poles. Since the poles are real or conjugate pairs, the sorting of conjugate pairs is done with positive real part first.
-    
-    Parameters:
-    - poles: The poles to be sorted.
-    - residues: The residues corresponding to the poles.
-    
-    Returns:
-    - The sorted poles, residues, d, and h.
-    """
-    poles = np.array(poles)
-    residues = np.array(residues)
-    N = len(poles)
-    cindex = get_cindex(poles)
-    
-    # argsort the poles
-    sorted_indices = np.argsort(poles, kind='mergesort')
-
-    poles = poles[sorted_indices]
-    residues = residues[sorted_indices]
-    cindex = cindex[sorted_indices]
-    
-    return poles, residues

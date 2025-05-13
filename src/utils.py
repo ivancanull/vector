@@ -54,7 +54,7 @@ def s_to_frequency(s):
     frequency = omega / (2 * np.pi)
     return frequency
 
-def get_cindex(poles, tol=1e-12):
+def get_cindex(poles, atol=1e-12, rtol=1e-12):
     """
     Get the cindex array for the given poles. Assert that complex poles come in real values or conjugate pairs.
     """
@@ -62,14 +62,40 @@ def get_cindex(poles, tol=1e-12):
     cindex = np.zeros(N)
     i = 0
     while i < N:
-        if np.abs(poles[i].imag / poles[i].real) > tol:
-            assert np.allclose(np.conj(poles[i]), poles[i+1]) , ("Complex poles must come in conjugate pairs: %s, %s" % (poles[i], poles[i+1]))
+        if not is_real(poles[i], atol=atol, rtol=rtol):
+            assert np.allclose(np.conj(poles[i]), poles[i+1]) , ("Complex poles must come in conjugate pairs: %s, %s" % (poles[i], poles[i+1]), '\n', 'All poles:', poles)
             cindex[i] = 1
             cindex[i+1] = 2
             i += 2
         else:
             i += 1
     return cindex
+
+def sort_poles_residues(poles, residues=None, atol=1e-12, rtol=1e-12):
+    """
+    Sort the poles and residues in ascending order of real part.
+    """
+    # put the real poles first
+    condition = is_real(poles, atol=atol, rtol=rtol)
+    # sort the real poles
+    real_poles = poles[condition].real # force the poles to be real
+    complex_poles = poles[~condition]
+    if residues is not None:
+        real_residues = residues[condition]
+        complex_residues = residues[~condition]
+    
+    # sort the complex poles by real part
+    real_poles_idx = np.argsort(np.abs(real_poles))
+    complex_poles_idx = np.argsort(np.abs(complex_poles))
+    real_poles = real_poles[real_poles_idx]
+    complex_poles = complex_poles[complex_poles_idx]
+
+    if residues is not None:
+        real_residues = real_residues[real_poles_idx]
+        complex_residues = complex_residues[complex_poles_idx]
+        return np.concatenate([real_poles, complex_poles]), np.concatenate([real_residues, complex_residues])
+    else:
+        return np.concatenate([real_poles, complex_poles])
 
 def add_frequency_point_on_have(have_freq: np.ndarray, available_freq: np.ndarray, add_freq: float) -> Tuple[bool, np.ndarray]:
     """

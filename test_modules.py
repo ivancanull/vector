@@ -1,4 +1,10 @@
-from src import *
+from src.touchstone import *
+from src.complex_func import *
+from src.utils import *
+from src.poles_init import *
+from src.afs import *
+from src.vector_fitting import *
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -55,118 +61,39 @@ class ScaleFunction(ComplexFunction):
         return value
 
 def read_touchstone():
-    touchstone = TouchstoneParser(2)
+    touchstone = TorchstoneParser(2)
     data = touchstone.parse("data/coupled_line_filter_touchstone.s2p")
     Z = FunctionFromTouchstone("data/coupled_line_filter_touchstone.s2p", 2, [0, 0])
     return Z
 
-def test_complex_reshape():
-    db = -29.65140962642262
-    degree = 55.75907076987683
-
-    A = db * np.exp(1j * np.radians(degree))
-    print(np.abs(A), np.angle(A))
-    A_trans_abs, A_trans_angle = np.abs(A), np.angle(A)
-    actual_A_2 = 10 ** (A_trans_abs / 20) * np.exp(1j * A_trans_angle)
-    actual_A = 10 ** (db / 20) * np.exp(1j * np.radians(degree))
-    print(actual_A)
-    print(actual_A_2)
-    print("Difference: ", np.abs(actual_A - actual_A_2))
-    
-def test_init_poles():
-    init_poles = basic_poles_initialize([3e9, 4.2e9], 0, 2)
-    print(init_poles)
-
-def test_touchstone():
-    Z = read_touchstone()
-    fmin = 3.0e9 
-    fmax = 4.2e9
-    freq = np.arange(3, 4.21, 0.01) * 1e9
-    s = frequency_to_s(freq)
-    values = Z(s)
-    S11 = values
-    n_min, n_max = 6, 14
-
-    respnF = 100
-    respfreq = np.linspace(fmin, fmax, respnF)
-    available_freq = Z.freq
-    resps = frequency_to_s(map_to_available_freq(respfreq, available_freq))
-    respnF = len(respfreq)
-    resps = frequency_to_s(respfreq)
-    best_ser = {}
-    second_best_ser = {}
-    for order in range(n_min, n_max + 1):
-        init_poles = basic_poles_initialize((fmin, fmax), 0 if order % 2 == 0 else 1, order // 2, scale="linear")
-        assert len(init_poles) == order
-        poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, Z, init_poles, max_iter=50, tol=1e-8, atol=1e-6)
-        Z_fit = evaluate(poles_fit, poles_residues, poles_d, poles_h, s)                
-        error = fitted_error_estimate(Z(s), Z_fit)
-
-        # save and update best and second best series
-        if best_ser == {}:
-            best_ser = {"poles": poles_fit, "residues": poles_residues, "d": poles_d, "h": poles_h, "error": error}
-        elif second_best_ser == {}:
-            if error < best_ser["error"]:
-                second_best_ser = best_ser
-                best_ser = {"poles": poles_fit, "residues": poles_residues, "d": poles_d, "h": poles_h, "error": error}
-            else:
-                second_best_ser = {"poles": poles_fit, "residues": poles_residues, "d": poles_d, "h": poles_h, "error": error}
+def _standard_error_estimate(Z, Z_fit):
+    # compare the true response with the fitted response
+    for method in ["RMSE", "NRMSE", "R-squared", "MReE", "MxReE"]:
+        if method == "NRMSE":
+            error = fitted_error_estimate(Z, Z_fit, method=method, norm="range")
         else:
-                    if error < best_ser["error"]:
-                        second_best_ser = best_ser
-                        best_ser = {"poles": poles_fit, "residues": poles_residues, "d": poles_d, "h": poles_h, "error": error}
-                    elif error < second_best_ser["error"]:
-                        second_best_ser = {"poles": poles_fit, "residues": poles_residues, "d": poles_d, "h": poles_h, "error": error}
+            error = fitted_error_estimate(Z, Z_fit, method=method)
+        if method == "MReE" or method == "MxReE":
+            print(f"{method}: {error * 100}%")
+        else:
+            print(f"{method}: {error}")
 
-    # adaptive sampling loop
-    resp1 = evaluate(best_ser["poles"], best_ser["residues"], best_ser["d"], best_ser["h"], resps)
-    resp2 = evaluate(second_best_ser["poles"], second_best_ser["residues"], second_best_ser["d"], second_best_ser["h"], resps)
-    print("poles num best: ", len(best_ser["poles"]))
-    print("poles num second best: ", len(second_best_ser["poles"]))
+def test_abstract_function_vector_fitting(fmin, fmax, n_poles_real, n_poles_complex, max_iter, freq, response, test_name, method):
 
-    h0 = np.max(np.abs(resp1 - resp2) / np.abs(resp1)) # relative error
-    h1 = np.max((np.abs(resp1) - np.abs(resp2)) / np.abs(resp1)) # magnitude error
-    h2 = np.max(np.abs(np.unwrap(np.angle(resp1) - np.angle(resp2)))) # phase error
-    h3 = np.mean(np.abs(resp1 - resp2) ** 2) # mean square error of the two responses
-    h = [h0, h1, h2, h3]          
-    for i, hi in enumerate(h):
-        print(f"h{i}: {hi}")
-
-    """
-    h0: 2.6550193661069414e-05
-    h1: 1.3744714174066998e-05
-    h2: 2.6458499113868328e-05
-    h3: 1.3275812155468643e-13
-    """
-
-    # init_poles = basic_poles_initialize(freqs_range=(3.0e9, 4.2e9), n_poles_real=0, n_poles_complex=1)
-
-    # poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, Z, init_poles, max_iter=50, tol=1e-6, relaxed=True)
-    # Z_fit = evaluate(poles_fit, poles_residues, poles_d, poles_h, s)          
-
-    # fig, ax = plt.subplots(1, 1, figsize=(12, 9), tight_layout=True)
-    # ax.plot(freq, 20 * np.log10(np.abs(S11)), label='True Response', marker='o')
-    # ax.plot(freq, 20 * np.log10(np.abs(Z_fit)), label='Fitted Response', linestyle='dashed')
-    # ax.set_xlabel('Frequency (Hz)')
-
-    # ax.set_ylabel("Magnitude (dB)")
-
-    # plt.legend()
-    # plt.savefig("test_touchstone.png")
-
-def test_afs():
-    Z = read_touchstone()
-    GiulioAFS(Z, 3e9, 4.2e9, n_min=2, n_max=10, tol_error=1e-6, heuristics_tol_error=[1e-4, 1e-4, 1e-4, 1e-4])
-
-def test_vf():
-    freq = np.linspace(0, 2e4, 1000)
     s = frequency_to_s(freq)
-    response = ComplexFunction(poles, residues, d, h)
-    init_poles = basic_poles_initialize(freqs_range=(1, 2e4), n_poles_real=2, n_poles_complex=8)
-    poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, response, init_poles, max_iter=10, tol=1e-6)
+    init_poles = basic_poles_initialize(freqs_range=(fmin, fmax), n_poles_real=n_poles_real, n_poles_complex=n_poles_complex)
+
+    # start the fitting process
+    start_time = time.perf_counter()
+    poles_fit, poles_residues, poles_d, poles_h = vector_fit(freq, response, init_poles, max_iter=max_iter, tol=1e-6, atol=1e-6, method=method)
+    print(f"Time taken: {time.perf_counter() - start_time:.2f}s")
+
+    # evaluate the fitted response
     Z = response(s)
     Z_fit = evaluate(poles_fit, poles_residues, poles_d, poles_h, s)
+    _standard_error_estimate(Z, Z_fit)
 
+    # plot the results
     fig, axes = plt.subplots(3, 1, figsize=(12, 9), tight_layout=True)
     axes[0].plot(freq, np.real(Z), label='True Response', marker='o')
     axes[0].plot(freq, np.real(Z_fit), label='Fitted Response', linestyle='dashed')
@@ -181,8 +108,50 @@ def test_vf():
     axes[2].set_ylabel("Magnitude (dB)")
 
     plt.legend()
-    plt.savefig("test_vf.pdf")
-    plt.savefig("test_vf.png")
+    plt.savefig(f"{test_name}.pdf")
+    plt.savefig(f"{test_name}.png")
+
+def test_defined_function_vector_fitting(method="pole_relocating"):
+    print(f"\nTesting {method} method with defined")
+    # define the function and frequency sample points
+    freq = np.linspace(0, 2e4, 1000)
+    s = frequency_to_s(freq)
+    response = ComplexFunction(poles, residues, d, h)
+
+    test_abstract_function_vector_fitting(1, 2e4, 2, 8, 10, freq, response, f"test_defined_function_vector_fitting_{method}", method)
+
+def test_data_function_vector_fitting(method="pole_relocating"):
+    print(f"\nTesting {method} method with data")
+    response = _read_touchstone()
+    fmin, fmax = 3.0e9, 4.2e9
+    freq = np.arange(3, 4.21, 0.01) * 1e9
+    s = frequency_to_s(freq)
+    test_abstract_function_vector_fitting(fmin, fmax, 0, 20, 20, freq, response, f"test_data_function_vector_fitting_{method}", method)
+
+def test_vector_fitting():
+    test_defined_function_vector_fitting("pole_relocating")
+    test_data_function_vector_fitting("pole_relocating")  
+    test_defined_function_vector_fitting("Gustavsen")
+    test_data_function_vector_fitting("Gustavsen")    
+        
+
+def test_complex_reshape():
+    db = -29.65140962642262
+    degree = 55.75907076987683
+
+    A = db * np.exp(1j * np.radians(degree))
+    print(np.abs(A), np.angle(A))
+    A_trans_abs, A_trans_angle = np.abs(A), np.angle(A)
+    actual_A_2 = 10 ** (A_trans_abs / 20) * np.exp(1j * A_trans_angle)
+    actual_A = 10 ** (db / 20) * np.exp(1j * np.radians(degree))
+    print(actual_A)
+    print(actual_A_2)
+    print("Difference: ", np.abs(actual_A - actual_A_2))
+    
+def test_Giulio_afs():
+    Z = _read_touchstone()
+    GiulioAFS(Z, 3e9, 4.2e9, n_min=2, n_max=10, tol_error=1e-6, heuristics_tol_error=[1e-4, 1e-4, 1e-4, 1e-4])
+
 
 def test_scale():
     # Define the function and frequency sample points
@@ -232,6 +201,6 @@ if __name__ == "__main__":
     # test_touchstone()
     # test_complex_reshape()    
     # test_afs()
-    # test_lbvf()
+    test_lbvf()
     # test_vf()
 
