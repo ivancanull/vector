@@ -2,6 +2,18 @@ from ast import List
 import numpy as np
 from typing import Tuple
 
+def float_p(string: str):
+    """
+    Convert a string to a float. If the conversion fails, return None.
+    
+    Parameters:
+    - string: The string to be converted.
+    
+    Returns:
+    - The converted float or None if conversion fails.
+    """
+    return float(string.replace('d', '.'))
+    
 def is_real(pole, atol=1e-12, rtol=1e-12):
     """
     Check if a given pole is real.

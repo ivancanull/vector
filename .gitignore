@@ -182,4 +182,8 @@ cython_debug/
 # cache
 *.pyc
 
+# data
 data/
+
+# models
+*.pth

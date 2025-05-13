@@ -6,12 +6,12 @@ from curses.ascii import isspace
 import re
 import pandas as pd
 
-__all__ = ['TorchstoneParser']
+__all__ = ['TouchstoneParser']
 
 optionsyntax = re.compile(r'(?<=\s|#)(?:([kMG]?Hz)|([SYZGH])|(DB|MA|RI)|(?:R\s+([\d\.]+)))(?=\s|$)', re.I | re.A)
 
 
-class TorchstoneParser():
+class TouchstoneParser():
     def __init__(self, port_num):
         """
         Initialize the parser with the given number of ports.
@@ -89,7 +89,7 @@ class TorchstoneParser():
         i = 0
         with open(filename, 'r') as f:
             lines = f.readlines()
-            for i, line in enumerate(lines):
+            for _, line in enumerate(lines):
                 if line.startswith('!'):
                     # comment line
                     continue

@@ -1,10 +1,4 @@
-from src.touchstone import *
-from src.complex_func import *
-from src.utils import *
-from src.poles_init import *
-from src.afs import *
-from src.vector_fitting import *
-
+from src import *
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -61,7 +55,7 @@ class ScaleFunction(ComplexFunction):
         return value
 
 def read_touchstone():
-    touchstone = TorchstoneParser(2)
+    touchstone = TouchstoneParser(2)
     data = touchstone.parse("data/coupled_line_filter_touchstone.s2p")
     Z = FunctionFromTouchstone("data/coupled_line_filter_touchstone.s2p", 2, [0, 0])
     return Z
@@ -233,11 +227,11 @@ def test_lbvf():
     response = ComplexFunction(poles, residues, d, h)
     SimonBayesianAFS(Z=response, fmin=1, fmax=2e4, sample_size=10)
 
-
 if __name__ == "__main__":
+    test_SPDataset()
     # test_touchstone()
     # test_complex_reshape()    
     # test_afs()
-    test_lbvf()
+    # test_lbvf()
     # test_vf()
 

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Sequence
 from .utils import s_to_frequency
-from .touchstone import TorchstoneParser
+from .touchstone import TouchstoneParser
 import numpy as np
 from typing import Tuple
 __all__ = ["ComplexFunction", "FunctionFromTouchstone"]
@@ -69,7 +69,7 @@ class ComplexFunction(FunctionAbstract):
         return self.evaluate(s)
     
 class FunctionFromTouchstone(FunctionAbstract):
-    def __init__(self, filename, port_num, port_combinations: Tuple = None):
+    def __init__(self, port_num, port_combinations: None):
         """
         Initialize the function from a touchstone file.
         
@@ -78,11 +78,69 @@ class FunctionFromTouchstone(FunctionAbstract):
         - port_num: The number of ports in the touchstone file.
         - port_combinations: A slice object representing the port combinations to be used in the function. Default is None.
         """
-        self.filename = filename
-        self.parser = TorchstoneParser(port_num=port_num)
-        self.data = self.parser.parse(filename)
+        self.filename = None
+        self.parsed = False
+        self.data = None
+
+        self.parser = TouchstoneParser(port_num=port_num)
         self.port_combinations = port_combinations
+        # self.freq = np.array(self.data['freq'])
+
+    def _process_different_format(self, i, j, idx = None):
+        """
+        Process the data based on the format specified in the touchstone file.
+        
+        Args:
+        - i: The index of the first port.
+        - j: The index of the second port.
+        - idx: The index of the frequency data. If None, all frequency data is returned.
+        
+        Returns:
+        - The processed value based on the format.
+        """
+        if idx is None:
+            # return all frequency data
+            idx = np.arange(len(self.data['freq']))
+        if self.parser.options['format'] == 'db':
+            # value = self.data[f'{i+1}{j+1}_1'].iloc[idx] * np.exp(1j * np.radians(self.data[f'{i+1}{j+1}_2'].iloc[idx]))
+            value = 10 ** (self.data[f'{i+1}{j+1}_1'][idx] / 20) * np.exp(1j * np.radians(self.data[f'{i+1}{j+1}_2'][idx]))
+        elif self.parser.options['format'] == 'ma':
+            value = self.data[f'{i+1}{j+1}_1'][idx] * np.exp(1j * np.radians(self.data[f'{i+1}{j+1}_2'][idx]))
+        elif self.parser.options['format'] == 'ri':
+            value = self.data[f'{i+1}{j+1}_1'][idx] + 1j * self.data[f'{i+1}{j+1}_2'][idx]
+        return value
+
+    def parse(self, filename):
+        """
+        Reparse the touchstone file.
+        
+        Args:
+        - filename: The name of the touchstone file to be parsed.
+        """
+        self.parsed = True
+        self.filename = filename
+        self.data = self.parser.parse(filename)
         self.freq = np.array(self.data['freq'])
+
+    def evaluate_all(self):
+        """
+        Return the parsed data.
+        
+        Returns:
+        - The parsed data from the touchstone file.
+        """
+        assert self.parsed, "Touchstone file not parsed. Please call parse() method first."
+        all_indices = np.arange(self.parser.port_num)
+        if self.port_combinations is None:
+            values = np.zeros((self.parser.port_num, self.parser.port_num, len(self.freq)), dtype=complex)
+            for i in range(self.parser.port_num):
+                for j in range(self.parser.port_num):
+                    values[i, j] = self._process_different_format(i, j)
+        else:
+            i = self.port_combinations[0]
+            j = self.port_combinations[1]
+            values = self._process_different_format(i, j)
+        return values
 
     def evaluate(self, s):
         """
@@ -95,6 +153,7 @@ class FunctionFromTouchstone(FunctionAbstract):
         - The value of the function at s or an array of values if s is an array
         """
 
+        assert self.parsed, "Touchstone file not parsed. Please call parse() method first."
         # find the closest frequency in the touchstone data
         idx = np.argmin(np.abs(self.freq - s_to_frequency(s)))
         values = np.zeros((self.parser.port_num, self.parser.port_num), dtype=complex)
