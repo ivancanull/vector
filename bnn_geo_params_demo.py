@@ -1,7 +1,6 @@
 # a demo to predict S11_R and S11_I using a Bayesian Neural Network
 
 # 1. the model takes input features including geo params and frequency
-from scipy import optimize
 from src import *
 from torch.utils.data import random_split
 from torch import nn, optim

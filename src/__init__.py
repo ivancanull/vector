@@ -7,3 +7,6 @@ from .touchstone import *
 from .afs import *
 from .bayesian import *
 from .dataset import *
+from .loader import *
+from .regularizer import *
+from .train import *

@@ -1,9 +1,4 @@
-from src.touchstone import *
-from src.complex_func import *
-from src.utils import *
-from src.poles_init import *
-from src.afs import *
-from src.vector_fitting import *
+from src import *
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -197,10 +192,12 @@ def test_lbvf():
     SimonBayesianAFS(Z=response, fmin=1, fmax=2e4, sample_size=10)
 
 if __name__ == "__main__":
-    test_SPDataset()
+    # test_SPDataset()
     # test_touchstone()
     # test_complex_reshape()    
     # test_afs()
-    test_lbvf()
+    # test_lbvf()
     # test_vf()
-
+    # test_load_dataset()
+    test_SPDataset()
+    test_multi_output_bnn()

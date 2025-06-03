@@ -3,7 +3,7 @@ from typing import Sequence
 from .utils import s_to_frequency
 from .touchstone import TouchstoneParser
 import numpy as np
-from typing import Tuple
+from typing import Tuple, List
 __all__ = ["ComplexFunction", "FunctionFromTouchstone"]
 
 class FunctionAbstract(ABC):
@@ -69,7 +69,7 @@ class ComplexFunction(FunctionAbstract):
         return self.evaluate(s)
     
 class FunctionFromTouchstone(FunctionAbstract):
-    def __init__(self, port_num, port_combinations: None):
+    def __init__(self, port_num, port_combinations: List[Tuple[int, int]] = None):
         """
         Initialize the function from a touchstone file.
         
