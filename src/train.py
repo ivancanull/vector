@@ -1,7 +1,9 @@
+import numpy as np
 import torch
 from tqdm import tqdm
 from typing import Tuple, Dict
 from .regularizer import RegularizerAbstract
+from .dataset import SPOnlineDataset
 
 def train(epochs: int,
           dataloader: torch.utils.data.DataLoader,
@@ -49,3 +51,39 @@ def train(epochs: int,
                 pbar.set_postfix_str(f'Epoch {epoch+1}/{epochs}, Loss: {average_loss:.4f}')
                 pbar.update(10)
     return model
+
+def validate(inputs,
+             outputs,
+             model: torch.nn.Module,
+             regularizer: Tuple[RegularizerAbstract],
+             samples: int,
+             device: torch.device):
+    """
+    Validate the model on the validation dataset.
+
+    Args:
+    - inputs (torch.Tensor): Input data for validation.
+    - outputs (torch.Tensor): Target data for validation.
+    - model (torch.nn.Module): The model to validate.
+    - regularizer (Tuple[RegularizerAbstract]): Regularizer to apply to inputs and outputs.
+    - samples (int): Number of samples to generate for uncertainty estimation.
+    - device (torch.device): Device to run the validation on (CPU or GPU).
+
+    Returns:
+        Dict[str, float]: Dictionary containing average loss for each output.
+    """    
+    inputs = inputs.to(device)
+    inputs = regularizer[0].regularize(inputs)
+            
+    output_samples = {key: [] for key in model.names}
+    for s in range(samples):
+        outputs = model(inputs)
+        for key in outputs.keys():
+            outputs[key] = regularizer[1][key].deregularize(outputs[key])
+            output_samples[key].append(outputs[key].cpu().detach().numpy())
+            
+    # aggregate the outputs
+    for key in output_samples.keys():
+        output_samples[key] = np.stack(output_samples[key], axis=1)
+
+    return output_samples

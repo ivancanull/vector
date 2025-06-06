@@ -159,4 +159,20 @@ def map_to_available_freq(have_freq: np.ndarray | float, available_freq: np.ndar
         return mapped_freq
     else:
         raise ValueError("Invalid type for have_freq")
+    
+def locate_freqs_idx(freqs: np.ndarray, sample_freqs: np.ndarray) -> np.ndarray:
+    """
+    Locate the indices of the sample frequencies in the available frequencies.
+    
+    Parameters:
+    - freqs: The available frequency points.
+    - sample_freqs: The sample frequency points to be located.
+    
+    Returns:
+    - The indices of the sample frequencies in the available frequencies.
+    """
+    idx = []
+    for freq in sample_freqs:
+        idx.append(np.argmin(np.abs(freqs - freq)))
+    return np.array(idx)
         

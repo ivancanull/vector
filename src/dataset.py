@@ -1,6 +1,6 @@
 import os
 import pickle
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -270,19 +270,48 @@ class SPOnlineDataset(SPDataset):
                  mode: str = "ri", 
                  random_sample: bool = False,):
         super().__init__(dataset_path, freqs, port_num, param_start_idx, port_combinations, mode, random_sample)
+        self.available_idx = np.arange(len(self.dataset)).tolist() # available indices in the dataset at first
 
-    def init_sample_idx(self, sample_size: int):
+    def random_sample_idx(self, sample_size: int):
         """
-        Initialize the training indices for the dataset.
+        Randomly sample the indices from the dataset.
         
         Args:
-        - train_size (int): Size of the training set.
+        - sample_size (int): Size of the sanpling set.
         """
         if sample_size > len(self.dataset):
             raise ValueError("Train size exceeds dataset size.")
-        self.sample_idx = np.random.choice(len(self.dataset), sample_size, replace=False).tolist()
+        self.sample_idx = np.random.choice(self.available_idx, sample_size, replace=False).tolist()
+    
+    def remove_idx(self, indices):
+        """
+        Remove a specific index from the avaiable indices.
         
+        Args:
+        - indices (int): Index to be removed.
+        """
+        for idx in indices:
+            for i, idx_ in enumerate(self.available_idx):
+                if idx_ == idx:
+                    del self.available_idx[i]
+                    break
+        return
+    
+    def set_sample_idx(self, sample_idx: List[int]):
+        """
+        Set the sample indices for the dataset.
+        
+        Args:
+        - sample_idx (List[int]): List of indices to set as sample indices.
+        """
+        self.sample_idx = sample_idx
 
+    def reset_available_idx(self):
+        """
+        Reset the available indices to the original dataset size.
+        """
+        self.available_idx = np.arange(len(self.dataset)).tolist()
+    
     def __len__(self):
         return len(self.sample_idx)
     
@@ -331,8 +360,12 @@ def test_SPOnlineDataset():
     dataset = SPOnlineDataset(dataset_path, freqs, port_num, 4, port_combinations)
     
     # Initialize sample indices
-    dataset.init_sample_idx(10)
-    
+    print("Available indices after initialization:", len(dataset.available_idx))
+
+    dataset.random_sample_idx(10)
+    dataset.remove_idx(dataset.sample_idx)
+    print("Available indices after initialization:", len(dataset.available_idx))
+    return
     for i in range(len(dataset)):
         geo_params, s_params = dataset[i]
-        print(f"Case ID: {i}, Geo Params: {geo_params}, S-Params: {s_params}")
+        print(f"Case ID: {dataset.sample_idx[i]}, Geo Params: {geo_params}, S-Params: {s_params}")

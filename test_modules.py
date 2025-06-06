@@ -199,5 +199,6 @@ if __name__ == "__main__":
     # test_lbvf()
     # test_vf()
     # test_load_dataset()
-    test_SPDataset()
-    test_multi_output_bnn()
+    # test_SPDataset()
+    # test_multi_output_bnn()
+    test_SPOnlineDataset()
