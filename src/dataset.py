@@ -3,6 +3,7 @@ import pickle
 from typing import List, Sequence, Tuple
 import numpy as np
 import torch
+
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
@@ -282,7 +283,7 @@ class SPOnlineDataset(SPDataset):
         if sample_size > len(self.dataset):
             raise ValueError("Train size exceeds dataset size.")
         self.sample_idx = np.random.choice(self.available_idx, sample_size, replace=False).tolist()
-    
+
     def remove_idx(self, indices):
         """
         Remove a specific index from the avaiable indices.
@@ -290,6 +291,7 @@ class SPOnlineDataset(SPDataset):
         Args:
         - indices (int): Index to be removed.
         """
+        # do nothing
         for idx in indices:
             for i, idx_ in enumerate(self.available_idx):
                 if idx_ == idx:
@@ -305,6 +307,42 @@ class SPOnlineDataset(SPDataset):
         - sample_idx (List[int]): List of indices to set as sample indices.
         """
         self.sample_idx = sample_idx
+
+    def set_available_idx(self, available_idx: List[int]):
+        """
+        Set the available indices for the dataset.
+        
+        Args:
+        - available_idx (List[int]): List of indices to set as available indices.
+        """
+        self.available_idx = available_idx
+
+    def extend_sample_idx(self, sample_idx: List[int]):
+        """
+        Append new sample indices to the existing sample indices.
+        
+        Args:
+        - sample_idx (List[int]): List of indices to append.
+        """
+        self.sample_idx.extend(sample_idx)
+
+    def get_sample_idx(self):
+        """
+        Get the current sample indices.
+        
+        Returns:
+        - List of sample indices.
+        """
+        return self.sample_idx
+    
+    def get_available_idx(self):
+        """
+        Get the current available indices.
+        
+        Returns:
+        - List of available indices.
+        """
+        return self.available_idx
 
     def reset_available_idx(self):
         """

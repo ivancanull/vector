@@ -38,10 +38,11 @@ def train(epochs: int,
                     targets[key] = regularizer[1][key].regularize(targets[key])
                 optimizer.zero_grad()
                 outputs = model(inputs)
-                loss = bayesian_loss_weight * bayesian_loss_fn(model)
+                loss = 0.0
+                if bayesian_loss_fn is not None:
+                    loss += bayesian_loss_weight * bayesian_loss_fn(model)
                 for key in model.names:
                     loss += data_loss_weights[key] * data_loss_fns[key](outputs[key], targets[key])
-                
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
@@ -50,12 +51,13 @@ def train(epochs: int,
                 # update the progress bar
                 pbar.set_postfix_str(f'Epoch {epoch+1}/{epochs}, Loss: {average_loss:.4f}')
                 pbar.update(10)
-    return model
+    return model, optimizer
 
 def validate(inputs,
              outputs,
              model: torch.nn.Module,
              regularizer: Tuple[RegularizerAbstract],
+             freeze: bool,
              samples: int,
              device: torch.device):
     """
@@ -75,15 +77,23 @@ def validate(inputs,
     inputs = inputs.to(device)
     inputs = regularizer[0].regularize(inputs)
             
-    output_samples = {key: [] for key in model.names}
-    for s in range(samples):
+    if freeze:
+        model.freeze()    
+        output_samples = {}
         outputs = model(inputs)
-        for key in outputs.keys():
-            outputs[key] = regularizer[1][key].deregularize(outputs[key])
-            output_samples[key].append(outputs[key].cpu().detach().numpy())
+        for key in model.names:
+            output_samples[key] = outputs[key].cpu().detach().numpy()
+    else:
+        model.unfreeze()
+        output_samples = {key: [] for key in model.names}
+        for s in range(samples):
+            outputs = model(inputs)
+            for key in outputs.keys():
+                outputs[key] = regularizer[1][key].deregularize(outputs[key])
+                output_samples[key].append(outputs[key].cpu().detach().numpy())
             
-    # aggregate the outputs
-    for key in output_samples.keys():
-        output_samples[key] = np.stack(output_samples[key], axis=1)
+        # aggregate the outputs
+        for key in output_samples.keys():
+            output_samples[key] = np.stack(output_samples[key], axis=1)
 
     return output_samples

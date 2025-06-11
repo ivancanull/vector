@@ -1,9 +1,104 @@
 import argparse
+
+from matplotlib.style import available
+from numpy import s_
 from src import *
 
 from torch.utils.data import random_split
 from torch import nn, optim
 import matplotlib.pyplot as plt
+
+def uncertainty_aware_resample_dataset(freqs, port_combinations, dataset, net, regularizer, sample_method, device, args, compare: bool = False, sample_size=50, sample_num=20):
+    """
+    Resample the dataset based on the uncertainty of the model predictions.
+    This function calculates the uncertainty of the model predictions and resamples the dataset based on the uncertainty.
+    Args:
+    - dataset: The dataset to resample.
+    - net: The Bayesian Neural Network model.
+    - regularizer: The regularizer to use for the model.
+    - device: The device to use for the model.
+    - args: The arguments for the model.
+    - compare: If True, compare the uncertainty with the true values.
+    - sample_size: The number of samples to resample.
+    - sample_num: The number of samples to generate for the frequency domain.
+
+    Returns:
+    - None
+    """
+
+    uncertainties = []
+    uncertainties_sum = []
+
+    if compare:
+        mse_losses = []
+    previous_idx = dataset.get_sample_idx()
+    dataset.set_sample_idx(dataset.available_idx)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
+
+    #  sample the dataset geometric parameters 
+    if sample_method in ["uniform", "random"]:
+        sample_idx = np.random.choice(len(dataset.available_idx), size=sample_size, replace=False)
+    elif sample_method == "uncertainty_aware":
+        
+        for x, y in dataloader:
+            output_samples = validate(x, y, net, regularizer, False, args.samples, device) # shape: (batch_size, n_samples, freqs, pc) and not freeze
+
+            ### Use the output variance of all ports and frequencies to calculate the uncertainty
+            # calculate the variance of the absolute value of the complex number
+            output_samples["ri"] = output_samples["r"] + 1j * output_samples["i"] # shape: (batch_size, n_samples, freqs, pc)
+            output_samples["abs_var"] = np.var(output_samples["r"] + 1j * output_samples["i"], axis=1)
+            output_samples["abs_var_sum"] = np.sum(output_samples["abs_var"], axis=(1, 2))
+            uncertainties.append(output_samples["abs_var"])
+            uncertainties_sum.append(output_samples["abs_var_sum"])
+
+            if compare:
+            # calculate the absolute error     
+                y_true = y["r"].cpu().detach().numpy() + 1j * y["i"].cpu().detach().numpy()# shape: (batch_size, freqs, pc)
+                abs_error = np.abs(np.mean(output_samples["ri"], axis=1)) - np.abs(y_true) # shape: (batch_size, freqs, pc)
+                mse_loss = np.mean(abs_error ** 2, axis=(1, 2))  # mean squared error across samples and ports
+                mse_losses.append(mse_loss)
+        
+        uncertainties = np.concatenate(uncertainties, axis=0)
+        uncertainties_sum = np.concatenate(uncertainties_sum, axis=0)
+        sample_idx = np.argsort(uncertainties_sum)[::-1][:sample_size]  # get the indices of the top 
+        if compare:
+            mse_losses = np.concatenate(mse_losses, axis=0)
+        
+    else:
+        raise ValueError(f"Unknown sample method: {sample_method}")
+
+    errors = []
+    sample_idx = sample_idx.tolist()  # convert to list for easier indexing
+
+    for j in range(sample_size):
+        # distribute the frequencies according to the uncertainties
+        if sample_method == "uniform":
+            sample_freq = uniform_distribute(freqs, sample_num)
+        elif sample_method == "random":
+            sample_freq = np.sort(np.random.choice(freqs, size=sample_num, replace=False))
+        elif sample_method == "uncertainty_aware":
+            sample_freq = np.sort(uncertainty_aware_distribute(freqs, np.sum(uncertainties[sample_idx[j]], axis=1), sample_num))
+        else:
+            raise ValueError(f"Unknown sample method: {sample_method}")
+        
+        sample_freq_idx = locate_freqs_idx(freqs, sample_freq)
+        for k, pc in enumerate(port_combinations):
+            init_poles = basic_poles_initialize(freqs_range=(3.5e9, 8.713e9), n_poles_real=4, n_poles_complex=8) # Pre defined values for the poles
+            poles, residues, d, h = vector_fit(sample_freq, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], sample_freq_idx], init_poles=init_poles, max_iter=20, tol=1e-7, atol=1e-7, rtol=1e-7)
+
+            s_params_fit = evaluate(poles, residues, d, h, frequency_to_s(freqs))
+            # calculate the l2 error
+            nrmse_error = fitted_error_estimate(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]], s_params_fit, method="NRMSE", norm="range")
+            errors.append(nrmse_error)
+            # set the s_params_fit to the dataset
+            dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]] = s_params_fit
+        
+    errors = np.stack(errors, axis=0)
+
+    dataset.remove_idx(sample_idx)  # remove the sample idx from the dataset
+    dataset.set_sample_idx(previous_idx)
+    dataset.extend_sample_idx(sample_idx)  # set the sample idx to the dataset and expand the dataset with the new samples
+    return dataset, errors
 
 def main():
     parser = argparse.ArgumentParser(description="Run Bayesian Neural Network demo for geophysical parameters.")
@@ -14,7 +109,7 @@ def main():
     parser.add_argument("--freqs", type=float, nargs=3, help="Frequency range as min, max, step (e.g., 0.1e9 20e9 0.03e9).")
     parser.add_argument("--start_idx", type=int, help="The index to start reading geometric parameters from the filename.")
     parser.add_argument("--samples", type=int, default=100, help="Number of samples to generate.")
-    parser.add_argument("--update_method", type=str, default="random", help="Method to update the dataset with new samples.")
+    parser.add_argument("--update_method", type=str, default="uniform", help="Method to update the dataset with new samples.")
     parser.add_argument("--retrain", action="store_true", help="Force to ratrain the model.")
 
 
@@ -40,7 +135,7 @@ def main():
         test_idx = np.random.choice(dataset.available_idx, size=test_size, replace=False)
         np.save(test_idx_path, test_idx)  # save the test indices for later use
 
-    dataset.remove_idx(test_idx.tolist())  # remove the test idx from the dataset
+    dataset.remove_idx(test_idx.tolist())  # remove the test idx from the dataset 
 
     # the initial sample size
     sample_size = 50
@@ -85,80 +180,45 @@ def main():
 
     optimizer = optim.Adam(net.parameters(), lr=.001)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_path = f"models/online_{args.model_name}_{args.update_method}.pth"
+    model_path = f"models/online_{args.model_name}_{args.update_method}_final.pth"
+    save_path = f"models/online_{args.model_name}_{args.update_method}_temp.pth"
 
+    net.to(device)
+    
     if os.path.exists(model_path) and not args.retrain:
         print("Loading pre-trained model...")
         net.load_state_dict(torch.load(model_path))
         net.to(device)
         net.eval()
+        sample_num = 20
         with torch.no_grad():
-            uncertainties = []
-            mse_losses = []
-            dataset.set_sample_idx(dataset.available_idx)
-            dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
-            for x, y in dataloader:
-                output_samples = validate(x, y, net, regularizer, args.samples, device) # shape: (batch_size, n_samples, freqs, pc)
-                # calculate the variance of the absolute value of the complex number
-                output_samples["ri"] = output_samples["r"] + 1j * output_samples["i"] # shape: (batch_size, n_samples, freqs, pc)
-                y_true = y["r"].cpu().detach().numpy() + 1j * y["i"].cpu().detach().numpy() # shape: (batch_size, freqs, pc)
-
-
-                abs_error = np.abs(np.mean(output_samples["ri"], axis=1)) - np.abs(y_true) # shape: (batch_size, freqs, pc)
-                mse_loss = np.mean(abs_error ** 2, axis=(1, 2))  # mean squared error across samples and ports
-                output_samples["abs_var"] = np.sum(np.var(output_samples["r"] + 1j * output_samples["i"], axis=1), axis=(1, 2))
-                
-                # plot the distribution of the absolute variance
-                mse_losses.append(mse_loss)
-                uncertainties.append(output_samples["abs_var"])
-            mse_losses = np.concatenate(mse_losses, axis=0)
-            uncertainties = np.concatenate(uncertainties, axis=0)
-            # plot the distribution of the absolute variance
-            plt.figure(figsize=(10, 6))
-            plt.hist(uncertainties, bins=50, density=True, alpha=0.7, color='blue')
-            plt.title("Distribution of Absolute Variance")
-            plt.xlabel("Absolute Variance")
-            plt.ylabel("Density")
-            plt.savefig(f"temp/{args.model_name}_bnn_geo_params_abs_var_distribution.png")
-
-            # plot the correlation between uncertainty and mse loss
-            plt.figure(figsize=(10, 6))
-            plt.scatter(uncertainties, mse_losses, alpha=0.5)
-            plt.title("Correlation between Uncertainty and MSE Loss")
-            plt.xlabel("Absolute Variance")
-            plt.ylabel("MSE Loss")
-            plt.savefig(f"temp/{args.model_name}_bnn_geo_params_uncertainty_vs_mse_loss.png")
-
+            dataset, errors = uncertainty_aware_resample_dataset(freqs, port_combinations, dataset, net, regularizer, args.update_method, device, args, compare=True, sample_size=sample_size, sample_num=sample_num)
+            mean_error = np.mean(errors)
+        print(f"Mean error of the uncertainty-aware resampling: {mean_error:.4e}")
     else:
-        for i in range(iter_num):
-            # update the dataset with new samples
-            if args.update_method == "random":
+        if os.path.exists(save_path) and not args.retrain:
+            print("Loading pre-saved training state...")
+            save = torch.load(save_path)
+            net.load_state_dict(save["model_state_dict"])
+            optimizer.load_state_dict(save["optimizer_state_dict"])
+            current_iter = save["current_iter"]
+            sample_idx = save["sample_idx"]
+            available_idx = save["available_idx"]
+            dataset.set_sample_idx(sample_idx)
+            dataset.set_available_idx(available_idx)
+        else:
+            current_iter = 0
+
+        for i in range(current_iter, iter_num):
+
+            sample_num = 20
+            if i == 0:
                 dataset.random_sample_idx(sample_size)
-                dataset.remove_idx(dataset.sample_idx)  # remove the new sample idx from the dataset
-            elif args.update_method == "uncertainty_aware":
-                # 
-                if i == 0:
-                    dataset.random_sample_idx(sample_size)
-                else:
-                    uncertainties = []
-                    with torch.no_grad():
-                        dataset.set_sample_idx(dataset.available_idx)
-                        dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
-                        for x, y in dataloader:
-                            output_samples = validate(x, y, net, regularizer, args.samples, device) # shape: (batch_size, n_samples, freqs, pc)
-                            # calculate the variance of the absolute value of the complex number
-                            output_samples["ri"] = output_samples["r"] + 1j * output_samples["i"] # shape: (batch_size, n_samples, freqs, pc)
-                            output_samples["abs_var"] = np.sum(np.var(output_samples["r"] + 1j * output_samples["i"], axis=1), axis=(1, 2))
-                            uncertainties.append(output_samples["abs_var"])
-                    uncertainties = np.concatenate(uncertainties, axis=0)
-                    sample_idx = np.argsort(uncertainties)[::-1][:sample_size]  # get the indices of the top uncertainties  
-                    dataset.set_sample_idx(sample_idx.tolist())
-                    dataset.remove_idx(dataset.sample_idx)  # remove the new sample idx from the dataset
             else:
-                raise ValueError(f"Unknown update method: {args.update_method}")
-            
+                dataset, errors = uncertainty_aware_resample_dataset(freqs, port_combinations, dataset, net, regularizer, args.update_method, device, args, compare=False, sample_size=sample_size, sample_num=sample_num)
+        
             dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
-            net = train(
+            net, optimizer = train(
                 epochs=args.epochs * (i + 1),
                 dataloader=dataloader,
                 model=net,
@@ -170,9 +230,18 @@ def main():
                 regularizer=regularizer,
                 device=device
             )
-            torch.save(net.state_dict(), model_path)
-
+            torch.save(
+                {"model_state_dict": net.state_dict(),
+                 "optimizer_state_dict": optimizer.state_dict(),
+                 "current_iter": i + 1,
+                 "sample_idx": dataset.get_sample_idx(),
+                 "available_idx": dataset.get_available_idx()},
+                save_path
+            )
+        torch.save(net.state_dict(), model_path)
     return
+
+    
 
     net.eval()
     net.to(device)

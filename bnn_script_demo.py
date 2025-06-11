@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 def main():
     parser = argparse.ArgumentParser(description="Run Bayesian Neural Network demo for geophysical parameters.")
     parser.add_argument("--model_name", type=str, help="Name of the model to save.")
+    parser.add_argument("--model_type", type=str, default="bnn", choices=["bnn", "mlp"], help="Type of model to use.")
     parser.add_argument("--data_path", type=str, default="data/spiral_inductor_s_parameters_export", help="Path directory to save the data.")
     parser.add_argument("--port_num", type=int, default=2, help="Number of ports.")
     parser.add_argument("--epochs", type=int, default=4000, help="Number of training epochs.")
@@ -27,7 +28,7 @@ def main():
     # split train / test
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
-    train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+    train_dataset, test_dataset = random_split(dataset, [train_size, test_size], generator=torch.Generator().manual_seed(42))
 
     test_dataset.random_sample = False  # disable random sampling for test dataset
 
@@ -35,7 +36,7 @@ def main():
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    model_path = f"models/{args.model_name}.pth"
+    model_path = f"models/{args.model_name}_{args.model_type}.pth"
     
     input_dim = 9
     hidden_dims = [256, 256, 256]
@@ -46,15 +47,27 @@ def main():
         'i': (2, None),
     }
     
-    # Create model
-    net = MultiOutputBNN(
-        input_dim=input_dim,
-        hidden_dims=hidden_dims,
-        prior_mus=prior_mus,
-        prior_sigmas=prior_sigmas,
-        output_channels=output_channels,
+    if args.model_type == "mlp":
+        net = MultiOutputMLP(
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            output_channels=output_channels,
+        )
+        bayesian_loss_fn = None
+        bayesian_loss_weight = 0.0
 
-    )
+    elif args.model_type == "bnn":
+        net = MultiOutputBNN(
+            input_dim=input_dim,
+            hidden_dims=hidden_dims,
+            prior_mus=prior_mus,
+            prior_sigmas=prior_sigmas,
+            output_channels=output_channels,
+        )
+        bayesian_loss_fn = BKLLoss(reduction='mean', last_layer_only=False)
+        bayesian_loss_weight = 0.01
+    else:
+        raise ValueError("Unsupported model type. Choose 'bnn' or 'mlp'.")
 
     data_loss_fns = {
         "r": nn.MSELoss(),
@@ -73,8 +86,7 @@ def main():
         "i": NoneRegularizer()
     }
     regularizer = (x_regularizer, y_regularizer)
-    bayesian_loss_fn = BKLLoss(reduction='mean', last_layer_only=False)
-    bayesian_loss_weight = 0.01
+    
 
     optimizer = optim.Adam(net.parameters(), lr=.001)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,27 +112,67 @@ def main():
     net.to(device)
     total_uncertainty_error = 0.0
     total_random_error = 0.0
+    
+    # freeze
+    with torch.no_grad():
+        idx = 0
+        mse_losses = []
+        for x, y in test_loader:
+            output_samples = validate(x, y, net, regularizer, True, args.samples, device) # shape: (batch_size, freqs, pc)
+            # calculate the variance of the absolute value of the complex number
+            output_samples["ri"] = output_samples["r"] + 1j * output_samples["i"] # shape: (batch_size, freqs, pc)
+            y_true = y["r"].cpu().detach().numpy() + 1j * y["i"].cpu().detach().numpy() # shape: (batch_size, freqs, pc)
+            abs_error = np.abs(output_samples["ri"]) - np.abs(y_true) # shape: (batch_size, freqs, pc)
+            mse_loss = np.mean(abs_error ** 2, axis=(1, 2))  # mean squared error across samples and ports
+            
+            fig, axes = plt.subplots(3, 1, figsize=(12, 9))
+            axes[0].plot(freqs, y["r"].cpu().detach().numpy()[0, :, 0], label='True real', color='blue')
+            axes[0].plot(freqs, output_samples["r"][0, :, 0], label='Predicted real', linestyle='dashed', color='orange')
+            axes[0].set_xlabel('Frequency (Hz)')
+            axes[0].set_ylabel('Real Part')
+            axes[0].legend()
+            axes[1].plot(freqs, y["i"].cpu().detach().numpy()[0, :, 0], label='True imag', color='blue')
+            axes[1].plot(freqs, output_samples["i"][0, :, 0], label='Predicted imag', linestyle='dashed', color='orange')
+            axes[1].set_xlabel('Frequency (Hz)')
+            axes[1].set_ylabel('Imaginary Part')
+            axes[1].legend()
+            axes[2].plot(freqs, np.abs(output_samples["ri"])[0, :, 0], label='True Abs', color='blue')
+            axes[2].plot(freqs, np.abs(y_true)[0, :, 0], label='Predicted Abs', linestyle='dashed', color='orange')
+            axes[2].set_xlabel('Frequency (Hz)')
+            axes[2].set_ylabel('Magnitude')
+            plt.savefig(f'temp/{args.model_name}_{args.model_type}_bnn_geo_params_{idx}_(0,0).png')
+            plt.close()
+            idx += 1
+
+            # plot the distribution of the absolute variance
+            mse_losses.append(mse_loss)
+        mse_losses = np.concatenate(mse_losses, axis=0)
+        print(f"Average MSE Loss: {np.mean(mse_losses):.4e}")
+
+        
+
+    return    
+
 
     with torch.no_grad():
         idx = 0
+        mse_losses = []
+        uncertainties = []
         for x, y in test_loader:
-            x = x.to(device)
-            x = x_regularizer.regularize(x)
-            
-            y_true = {
-                "r": y["r"].cpu().detach().numpy()[0],
-                "i": y["i"].cpu().detach().numpy()[0],
-            }
-            y_samp = {
-                "r": [],
-                "i": [],
-            }
-            for s in range(args.samples):
-                pred = net(x)
-                # print(pred["r"].cpu().detach().numpy().shape) # (1, freqs, 2)
-                y_samp["r"].append(pred["r"].cpu().detach().numpy()) 
-                y_samp["i"].append(pred["i"].cpu().detach().numpy())
+            output_samples = validate(x, y, net, regularizer, args.samples, device) # shape: (batch_size, n_samples, freqs, pc)
+            # calculate the variance of the absolute value of the complex number
+            output_samples["ri"] = output_samples["r"] + 1j * output_samples["i"] # shape: (batch_size, n_samples, freqs, pc)
+            y_true = y["r"].cpu().detach().numpy() + 1j * y["i"].cpu().detach().numpy() # shape: (batch_size, freqs, pc)
 
+
+            abs_error = np.abs(np.mean(output_samples["ri"], axis=1)) - np.abs(y_true) # shape: (batch_size, freqs, pc)
+            mse_loss = np.mean(abs_error ** 2, axis=(1, 2))  # mean squared error across samples and ports
+            output_samples["abs_var"] = np.sum(np.var(output_samples["r"] + 1j * output_samples["i"], axis=1), axis=(1, 2))
+            
+            # plot the distribution of the absolute variance
+            mse_losses.append(mse_loss)
+            uncertainties.append(output_samples["abs_var"])
+            
             y_samp["r"] = np.concatenate(y_samp["r"], axis=0)
             y_samp["i"] = np.concatenate(y_samp["i"], axis=0)
 
