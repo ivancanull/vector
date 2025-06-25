@@ -27,6 +27,7 @@ def train(epochs: int,
     """
     model.train()
     model.to(device)
+    model.unfreeze()
     with tqdm(total=epochs, unit="epoch") as pbar:
         for epoch in range(epochs):
             total_loss = 0.0
@@ -49,6 +50,7 @@ def train(epochs: int,
             average_loss = total_loss / len(dataloader)
             if epoch % 10 == 9:
                 # update the progress bar
+                # validation
                 pbar.set_postfix_str(f'Epoch {epoch+1}/{epochs}, Loss: {average_loss:.4f}')
                 pbar.update(10)
     return model, optimizer
@@ -81,7 +83,8 @@ def validate(inputs,
         model.freeze()    
         output_samples = {}
         outputs = model(inputs)
-        for key in model.names:
+        for key in outputs.keys():
+            outputs[key] = regularizer[1][key].deregularize(outputs[key])
             output_samples[key] = outputs[key].cpu().detach().numpy()
     else:
         model.unfreeze()

@@ -1,5 +1,6 @@
 import os
 import pickle
+import re
 from typing import List, Sequence, Tuple
 import numpy as np
 import torch
@@ -142,12 +143,13 @@ class SPDataset(Dataset):
             input_features = input_features[sampled_indices]
         return input_features
     
-    def flatten_s_parameters(self, s_params: torch.Tensor, sampled_indices: List[int] = None):
+    def flatten_s_parameters(self, s_params: torch.Tensor, sampled_indices: List[int] = None, flatten: bool = True):
         """
         Flatten the frequency data for S-parameters.
         Args:
         - s_params (torch.Tensor): S-parameter data.
         - sampled_indices (List[int]): Indices to sample from the geometric parameters.
+        - flatten (bool): Whether to flatten the S-parameters.
         Returns:
         - s_params (torch.Tensor): Reshaped S-parameter data.
         """
@@ -159,13 +161,25 @@ class SPDataset(Dataset):
                 select.append(s_params[pc[0], pc[1], :])
             s_params = torch.stack(select, dim=0) # shape (ports, freqs)
 
-        if sampled_indices is not None and self.random_sample:
-            # sample the indices if provided
-            s_params = s_params[:, sampled_indices]
-        s_params = s_params.permute(1, 0) # shape (freqs, ports)
+        if flatten:
+            if sampled_indices is not None and self.random_sample:
+                # sample the indices if provided
+                s_params = s_params[:, sampled_indices]
+            
+            s_params = s_params.permute(1, 0) # shape (freqs, ports)
 
         return s_params
-
+    
+    def load(self, dataset_path: str):
+        """
+        Load the dataset from a specified path.
+        
+        Args:
+        - dataset_path (str): Path to load the dataset from.
+        """
+        with open(dataset_path, 'rb') as f:
+            self.dataset = pickle.load(f)
+            
     def random_sample_frequency(self, sample_num: int):
         assert sample_num <= len(self.freqs), "Sample number exceeds available frequency points."
     
@@ -186,15 +200,21 @@ class SPDataset(Dataset):
         geo_params = torch.tensor(data["geo_params"], dtype=torch.float32)
         if self.mode == "abs":
             s_params = torch.tensor(np.abs(data["s_params"]), dtype=torch.float32).unsqueeze(0)
+            input_features, s_params = self.flatten_frequency(geo_params, s_params, data["sampled_indices"])
+            return input_features, s_params
         elif self.mode == "ri":
             input_features = self.flatten_geo_params(torch.tensor(data["geo_params"], dtype=torch.float32), data["sampled_indices"])
             s_params_real = self.flatten_s_parameters(torch.tensor(np.real(data["s_params"]), dtype=torch.float32), data["sampled_indices"])
             s_params_imag = self.flatten_s_parameters(torch.tensor(np.imag(data["s_params"]), dtype=torch.float32), data["sampled_indices"])
             return input_features, {"r": s_params_real, "i": s_params_imag}
+        elif self.mode == "unflatten_ri":
+            input_features = torch.tensor(data["geo_params"], dtype=torch.float32)
+            s_params_real = self.flatten_s_parameters(torch.tensor(np.real(data["s_params"]), dtype=torch.float32), data["sampled_indices"], False)
+            s_params_imag = self.flatten_s_parameters(torch.tensor(np.imag(data["s_params"]), dtype=torch.float32), data["sampled_indices"], False)
+            return input_features, {"r": s_params_real, "i": s_params_imag}
         else:
             raise ValueError()
-        input_features, s_params = self.flatten_frequency(geo_params, s_params, data["sampled_indices"])
-        return input_features, s_params
+        
 
 class PolesResiduesDataset(Dataset):
     """
@@ -272,6 +292,8 @@ class SPOnlineDataset(SPDataset):
                  random_sample: bool = False,):
         super().__init__(dataset_path, freqs, port_num, param_start_idx, port_combinations, mode, random_sample)
         self.available_idx = np.arange(len(self.dataset)).tolist() # available indices in the dataset at first
+        self.sample_idx = []
+        self.history_idx = []
 
     def random_sample_idx(self, sample_size: int):
         """
@@ -326,6 +348,15 @@ class SPOnlineDataset(SPDataset):
         """
         self.sample_idx.extend(sample_idx)
 
+    def extend_history_idx(self, history_idx: List[int]):
+        """
+        Append new history indices to the existing history indices.
+        
+        Args:
+        - history_idx (List[int]): List of indices to append.
+        """
+        self.history_idx.extend(history_idx)
+
     def get_sample_idx(self):
         """
         Get the current sample indices.
@@ -349,23 +380,56 @@ class SPOnlineDataset(SPDataset):
         Reset the available indices to the original dataset size.
         """
         self.available_idx = np.arange(len(self.dataset)).tolist()
+
+    def save(self, dataset_path: str):
+        """
+        Save the current dataset to a specified path.
+        
+        Args:
+        - dataset_path (str): Path to save the dataset.
+        """
+        data = {
+            "sample_idx": self.sample_idx,
+            "available_idx": self.available_idx,
+            "history_idx": self.history_idx,
+            "dataset": self.dataset,
+        }
+        with open(dataset_path, 'wb') as f:
+            pickle.dump(data, f)
     
+    def load(self, dataset_path: str):
+        """
+        Load the dataset from a specified path.
+        
+        Args:
+        - dataset_path (str): Path to load the dataset from.
+        """
+        with open(dataset_path, 'rb') as f:
+            data = pickle.load(f)
+            self.sample_idx = data["sample_idx"]
+            self.available_idx = data["available_idx"]
+            self.history_idx = data["history_idx"]
+            self.dataset = data["dataset"]
+
     def __len__(self):
         return len(self.sample_idx)
     
     def __getitem__(self, idx):
         return super().__getitem__(self.sample_idx[idx])
+    
+
 
 def test_SPDataset():
     dataset_path = "/public/home/zhanghf/projects/vector/data/spiral_inductor_s_parameters_export"
     port_num = 2
     freqs = np.arange(0.1e9, 20e9, 0.03e9)
     port_combinations = [(0, 0), (0, 1)]
-    dataset = SPDataset(dataset_path, freqs, port_num, 4, port_combinations)
-    
-    for i in range(len(dataset)):
-        geo_params, s_params = dataset[i]
-        print(f"Case ID: {i}, Geo Params: {geo_params}, S-Params: {s_params}")
+    dataset = SPDataset(dataset_path, freqs, port_num, 4, port_combinations, mode="unflatten_ri")
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
+    for x, y in dataloader:
+        geo_params = x
+        s_params = y
+        print(f"Geo Params: {geo_params.shape}, S-Params: {s_params['r'].shape}")
 
 def test_PolesResiduesDataset():
     dataset_path = "/public/home/zhanghf/projects/vector/data/spiral_inductor_s_parameters_export"

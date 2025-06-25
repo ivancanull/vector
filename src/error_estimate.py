@@ -41,8 +41,27 @@ def fitted_error_estimate(Z, Z_fit, method="RMSE", **kwargs):
         return np.mean(np.abs((Z - Z_fit) / np.abs(Z)))
     elif method == "MxReE": # Maximum Relative Error
         return np.max(np.abs((Z - Z_fit) / np.abs(Z)))
+    elif method == "NMReE": # Normalized Mean Relative Error   
+        norm = kwargs["norm"] if "norm" in kwargs else "range"
+        mre = np.mean(np.abs((Z - Z_fit) / np.abs(Z)))
+        # Normalize MReE based on the chosen method
+        if norm == "range":
+            return mre / (np.max(np.abs(Z)) - np.min(np.abs(Z)))
+        elif norm == "mean":
+            return mre / np.mean(np.abs(Z))
+        elif norm == "std":
+            return mre / np.std(np.abs(Z))
+        else:
+            raise ValueError(f"Unknown normalization method: {norm}")
+    elif method == "PSNR": # Peak Signal-to-Noise Ratio
+        mse = np.mean((np.abs(Z - Z_fit))**2)
+        max_val = np.max(np.abs(Z))
+        if max_val == 0:
+            return float('inf')
+        else:
+            return 20 * np.log10(max_val / np.sqrt(mse))
     else:
-        raise ValueError("Invalid method. Choose from 'RMSE'.")
+        raise ValueError("Invalid method.")
 
 def poles_residues_error_estimate(poles, residues, d, h, poles_fit, residues_fit, d_fit, h_fit, method="Error"):
     """

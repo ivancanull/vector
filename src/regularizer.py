@@ -55,3 +55,32 @@ class MinMaxRegularizer(RegularizerAbstract):
         self.min_n = self.min_n.to(n.device)
         self.max_n = self.max_n.to(n.device)
         return (n + 1) / 2 * (self.max_n - self.min_n) + self.min_n
+
+class DivideRegularizer(RegularizerAbstract):
+    def __init__(self, divider) -> None:
+        super().__init__()
+        self.divider = torch.tensor(divider, dtype=torch.float32)
+    
+    def regularize(self, n):
+        """
+        Regularize the input n using standardization.
+        
+        Args:
+            n (torch.Tensor): Input tensor to be regularized.
+        
+        Returns:
+            torch.Tensor: Regularized tensor.
+        """
+        return n / self.divider.to(n.device)
+    
+    def deregularize(self, n):
+        """
+        Deregularize the input n back to its original scale.
+        
+        Args:
+            n (torch.Tensor): Input tensor to be deregularized.
+        
+        Returns:
+            torch.Tensor: Deregularized tensor.
+        """
+        return n * self.divider.to(n.device)

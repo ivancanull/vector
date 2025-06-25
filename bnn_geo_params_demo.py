@@ -148,12 +148,12 @@ def bnn_geo_params():
             plt.scatter(freqs, y.cpu().numpy(), label='True S11 Abs', color='blue')
             plt.plot(freqs, y_samp, alpha=0.1)
             plt.fill_between(freqs, y_samp.min(axis=1), y_samp.max(axis=1), alpha=0.2, color='red', label='Range')
-            plt.savefig(f'temp/bnn_geo_params_s11_abs_{idx}.png')
+            plt.savefig(f'final/bnn_geo_params_s11_abs_{idx}.png')
             plt.close()
 
             plt.figure(figsize=(10, 5))
             plt.plot(freqs, y_samp_var, label='Aleatoric Uncertainty', color='red')
-            plt.savefig(f'temp/bnn_geo_params_s11_abs_noise_{idx}.png')
+            plt.savefig(f'final/bnn_geo_params_s11_abs_noise_{idx}.png')
             plt.close()
 
             idx += 1

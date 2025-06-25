@@ -201,4 +201,7 @@ if __name__ == "__main__":
     # test_load_dataset()
     # test_SPDataset()
     # test_multi_output_bnn()
-    test_SPOnlineDataset()
+    # test_SPOnlineDataset()
+    # test_Lout()
+    # test_transposed_conv_net()
+    test_BayesianTransposedConv1D()

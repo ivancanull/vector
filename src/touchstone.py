@@ -22,6 +22,7 @@ class TouchstoneParser():
         self.port_num = port_num
         self.options = {"freq_unit": "Hz", "mode": "s", "format": "db", "r": 50}
         self.columns = self.init_columns()
+        self.split_lines = int(port_num * port_num * 2 // 8) # each line contains 8 numbers
     
     def init_columns(self):
         """
@@ -52,7 +53,7 @@ class TouchstoneParser():
                 self.options['r'] = float(match.group(4))
         return 
     
-    def parse_data(self, line):
+    def parse_data(self, line, row, first_line=False):
         """
         Parse the data line of the touchstone file.
 
@@ -60,20 +61,23 @@ class TouchstoneParser():
         - line: The data line to be parsed.
         """
         splits = line.split()
-        freq = float(splits[0])
+        if first_line:
+            if row is not None:
+                raise ValueError("First line should not contain data.")
+            freq = float(splits[0])
+            # change the unit of frequency
+            if self.options['freq_unit'].lower() == 'khz':
+                freq *= 1e3
+            elif self.options['freq_unit'].lower() == 'mhz':
+                freq *= 1e6
+            elif self.options['freq_unit'].lower() == 'ghz':
+                freq *= 1e9
+            row = [freq]
+            splits = splits[1:]  # remove the frequency from the splits
 
-        # change the unit of frequency
-        if self.options['freq_unit'].lower() == 'khz':
-            freq *= 1e3
-        elif self.options['freq_unit'].lower() == 'mhz':
-            freq *= 1e6
-        elif self.options['freq_unit'].lower() == 'ghz':
-            freq *= 1e9
-
-        row = []
-        for i in range(1, len(splits), 2):
+        for i in range(0, len(splits) - 1, 2):
             row.extend([float(splits[i]), float(splits[i+1])])
-        return [freq] + row
+        return row
 
     def parse(self, filename):
         """
@@ -87,6 +91,8 @@ class TouchstoneParser():
         """
         data = pd.DataFrame(columns=self.columns)
         i = 0
+        split_i = 0
+        row = None
         with open(filename, 'r') as f:
             lines = f.readlines()
             for _, line in enumerate(lines):
@@ -100,8 +106,13 @@ class TouchstoneParser():
                     # empty line
                     continue
                 else:
-                    row = self.parse_data(line)
-                    # append a row to the data DataFrame
-                    data.loc[i] = row
-                    i += 1
+                    row = self.parse_data(line, row, first_line=(split_i == 0))
+                    split_i += 1
+                    if split_i == self.split_lines:
+                        # append a row to the data DataFrame
+                        data.loc[i] = row
+                        i += 1
+                        split_i = 0
+                        row = None
+                        
         return data
