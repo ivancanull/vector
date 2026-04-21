@@ -1,0 +1,43 @@
+target:
+  name: line
+  port_num: 4
+  port_combinations:
+    - [0, 0]
+    - [0, 1]
+    - [0, 2]
+    - [0, 3] 
+
+data:
+  path: data/Coupled_Transmission_Line_export
+  start_idx: 4
+  freqs:
+    min: 5.0e+9
+    max: 10.0125e+9
+    step: 0.0125e+9
+  regularization: 
+    min: [1.5, 25, 30, 2.5, 5.0e+9]
+    max: [2.0, 30, 35, 3.0, 10.0e+9]
+  y_regularization: 
+    r: [1, 1, 10, 10]
+    i: [1, 1, 10, 10]
+  mode: ri
+  load_from_online_data: False
+  load_data_path: /public/home/zhanghf/projects/vector/data/inductor_bnn_online_uaw_uaw_dataset.pkl
+
+model:
+  name: mlp
+  input_dim: 5
+  hidden_dims: [256, 256, 256]
+  output_channels:
+    r: [4, 1]
+    i: [4, 1]
+
+case_name: line_mlp_test
+
+train:
+  epochs: 5000
+
+test:
+  samples: 100
+  
+  

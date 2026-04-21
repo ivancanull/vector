@@ -1,0 +1,49 @@
+target:
+  name: inductor
+  port_num: 2
+  port_combinations:
+    - [0, 0]
+    - [0, 1]
+  
+data:
+  path: data/spiral_inductor_export
+  start_idx: 4
+  freqs:
+    min: 0.1e+9
+    max: 20.02e+9
+    step: 0.03e+9
+  regularization: 
+    min: [55, 1.5, 15.0, 0.1e+9]
+    max: [60, 2.0, 20.0, 19.99e+9]
+  mode: ri
+
+guide_model:
+  name: bnn
+  input_dim: 4
+  hidden_dims: [256, 256, 256]
+  output_channels:
+    r: [2, 1]
+    i: [2, 1]
+
+iter_num: 6
+
+train:
+  epochs: 2000
+
+test:
+  samples: 100
+
+online:
+  data_sample_size: 30
+  dataset_update_method: uncertainty_aware
+  freq_sample_method: uncertainty_aware
+  freq_sample_size: 20
+  forget: True
+
+vector_fitting:
+  n_poles_real: 2
+  n_poles_complex: 4
+  
+save_name: inductor_bnn_online_uaw_uaw
+
+  

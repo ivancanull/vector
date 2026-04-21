@@ -1,0 +1,44 @@
+target:
+  name: filter
+  port_num: 2
+  port_combinations:
+    - [0, 0]
+    - [0, 1]
+  
+data:
+  path: data/bandpass_coupled_line_filter_export
+  start_idx: 9
+  freqs:
+    min: 3.5e+9
+    max: 8.713e+9
+    step: 0.013e+9
+  regularization: 
+    min: [7.7, 8.0, 7.8, 0.9, 0.7, 0.9, 0.13, 0.55]
+    max: [7.9, 8.2, 8.0, 1.1, 0.9, 1.1, 0.16, 0.6]
+  mode: unflatten_ri
+  load_from_online_data: True
+  load_data_path: /public/home/zhanghf/projects/vector/data/filter_bnn_online_random_uaw_dataset.pkl
+
+model:
+  name: tcn
+  input_dim: 8
+  hidden_dims: [64, 64, 64, 32, 16]
+  output_channels:
+    r: [2, 401]
+    i: [2, 401]
+  tcns:
+    kernel_size: [32, 32, 32]
+    stride: [3, 3, 3]
+    padding: [0, 1, 0]
+    dilation: [1, 1, 1]
+    output_padding: [0, 1, 0]
+
+case_name: filter_tcn_online_random_uaw_final
+
+train:
+  epochs: 10000
+
+test:
+  samples: 100
+  
+  
