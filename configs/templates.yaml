@@ -1,0 +1,18 @@
+templates:
+  bclf_template_v1:
+    project_path: "D:/hfss_templates/bclf_template_v1.aedt"
+    design_name: "BCLF_Design"
+    setup_name: "Setup1"
+    sweep_name: "Sweep1"
+
+  si_template_v1:
+    project_path: "D:/hfss_templates/si_template_v1.aedt"
+    design_name: "SI_Design"
+    setup_name: "Setup1"
+    sweep_name: "Sweep1"
+
+  mtl_template_v1:
+    project_path: "D:/hfss_templates/mtl_template_v1.aedt"
+    design_name: "MTL_Design"
+    setup_name: "Setup1"
+    sweep_name: "Sweep1"
