@@ -1,0 +1,39 @@
+target:
+  name: inductor
+  port_num: 2
+  port_combinations:
+    - [0, 0]
+    - [0, 1]
+  
+data:
+  path: data/spiral_inductor_export
+  start_idx: 4
+  freqs:
+    min: 0.1e+9
+    max: 20.02e+9
+    step: 0.03e+9
+  regularization: 
+    min: [55, 1.5, 15.0, 0.1e+9]
+    max: [60, 2.0, 20.0, 19.99e+9]
+  mode: ri
+  load_from_online_data: True
+  load_data_path: /public/home/zhanghf/projects/vector/data/inductor_full_0d6_dataset.pkl
+
+model:
+  name: mlp
+  input_dim: 4
+  hidden_dims: [256, 256, 256]
+  output_channels:
+    r: [2, 1]
+    i: [2, 1]
+
+
+case_name: inductor_mlp_full_0d6_final
+
+train:
+  epochs: 5000
+
+test:
+  samples: 100
+  
+  

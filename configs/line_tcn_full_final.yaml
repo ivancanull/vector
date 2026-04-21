@@ -1,0 +1,49 @@
+target:
+  name: transmission_line
+  port_num: 4
+  port_combinations:
+    - [0, 0]
+    - [0, 1]
+    - [0, 2]
+    - [0, 3] 
+    
+data:
+  path: data/Coupled_Transmission_Line_export
+  start_idx: 4
+  freqs:
+    min: 5.0e+9
+    max: 10.0125e+9
+    step: 0.0125e+9
+  regularization: 
+    min: [1.5, 25, 30, 2.5]
+    max: [2.0, 30, 35, 3.0]
+  y_regularization: 
+    r: [[1], [1], [0.1], [0.1]]
+    i: [[1], [1], [0.1], [0.1]]
+  mode: unflatten_ri
+  load_from_online_data: True
+  load_data_path: /public/home/zhanghf/projects/vector/data/line_full_dataset.pkl
+
+model:
+  name: tcn
+  input_dim: 4
+  hidden_dims: [64, 64, 64, 32, 16]
+  output_channels:
+    r: [4, 401]
+    i: [4, 401]
+  tcns:
+    kernel_size: [32, 32, 32]
+    stride: [3, 3, 3]
+    padding: [0, 1, 0]
+    dilation: [1, 1, 1]
+    output_padding: [0, 1, 0]
+
+case_name: line_tcn_full_final
+
+train:
+  epochs: 2000
+
+test:
+  samples: 100
+  
+  

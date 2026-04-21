@@ -249,7 +249,7 @@ def _pole_relocating_vector_fit(s: np.ndarray,
     # check if d_res is suited for zeros calculation
     if np.abs(d_res) < tol_res:
         # d_res is too small, discard solution and proceed the |d_res| = tol_res
-        print(f'Replacing d_res solution as it was too small ({d_res}).')
+        # print(f'Replacing d_res solution as it was too small ({d_res}).')
         d_res = tol_res if d_res > 0 else -tol_res
 
     # build test matrix H

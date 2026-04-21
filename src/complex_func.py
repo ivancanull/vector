@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Sequence
-from .utils import s_to_frequency
+from .utils import frequency_to_s, locate_freqs_idx, s_to_frequency
 from .touchstone import TouchstoneParser
 import numpy as np
 from typing import Tuple, List
-__all__ = ["ComplexFunction", "FunctionFromTouchstone"]
+__all__ = ["FunctionFromNumpy", "ComplexFunction", "FunctionFromTouchstone"]
 
 class FunctionAbstract(ABC):
     def __init__(self) -> None:
@@ -17,7 +17,45 @@ class FunctionAbstract(ABC):
     @abstractmethod
     def __call__(self, s):
         pass
+    
+class FunctionFromNumpy(FunctionAbstract):
 
+    def __init__(self, data: Sequence[complex], freqs: Sequence[float]):
+        """
+        Initialize the function from a numpy array of complex numbers.
+        
+        Args:
+        - data: A sequence of complex numbers representing the function values.
+        """
+        self.data = np.array(data, dtype=complex)
+        self.freq = freqs
+    
+    def evaluate(self, s):
+        """
+        Evaluate the function at a given point or array of points s.
+        
+        Args:
+        - s: A complex number or a numpy array of complex numbers where the function is to be evaluated.
+        
+        Returns:
+        - The value of the function at s or an array of values if s is an array
+        """
+        freq = s_to_frequency(s)
+        idx = locate_freqs_idx(self.freq, freq) 
+        return self.data[idx]
+    
+    def __call__(self, s):
+        """
+        Makes the instance callable, so you can use the instance like a function.
+        
+        Args:
+        - s: A complex number or a numpy array of complex numbers where the function is to be evaluated.
+        
+        Returns:
+        - The value of the function at s or an array of values if s is an array
+        """
+        return self.evaluate(s)
+    
 class ComplexFunction(FunctionAbstract):
     def __init__(self, poles, residues, d=0, h=0):
         """

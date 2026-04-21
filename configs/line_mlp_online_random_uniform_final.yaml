@@ -27,7 +27,7 @@ data:
 model:
   name: mlp
   input_dim: 5
-  hidden_dims: [512, 512, 512]
+  hidden_dims: [256, 256, 256]
   output_channels:
     r: [4, 1]
     i: [4, 1]
@@ -35,7 +35,7 @@ model:
 case_name: line_mlp_online_random_uniform_final
 
 train:
-  epochs: 10000
+  epochs: 2000
 
 test:
   samples: 100

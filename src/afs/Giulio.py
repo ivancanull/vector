@@ -2,15 +2,15 @@ from ..poles_init import basic_poles_initialize
 from ..vector_fitting import vector_fit, evaluate, print_params, get_cindex
 from ..error_estimate import fitted_error_estimate
 from ..utils import frequency_to_s, add_frequency_point_on_have, map_to_available_freq
-from ..complex_func import ComplexFunction, FunctionFromTouchstone
+from ..complex_func import ComplexFunction, FunctionFromNumpy, FunctionFromTouchstone
 import numpy as np
 import matplotlib.pyplot as plt
 
 from typing import Tuple, Callable
 
-DEBUG = True
+DEBUG = False
 
-def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_error: float = 1e-4, heuristics_tol_error: Tuple[float, float, float, float] = (1e-4, 1e-4, 1e-4, 1e-4)):
+def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_error: float = 1e-4, heuristics_tol_error: Tuple[float, float, float, float] = (1e-4, 1e-4, 1e-4, 1e-4), max_n_freq = 20):
     """
     Adaptive Frequency Sampling Algorithm implemented in Giulio A. et al.'s paper.
 
@@ -37,6 +37,9 @@ def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_
     # if Z is a ComplexFunction, the available frequency points are the same as the response frequency points
     elif isinstance(Z, ComplexFunction):
         respfreq = np.linspace(fmin, fmax, respnF)
+    elif isinstance(Z, FunctionFromNumpy):
+        respfreq = Z.freq
+        respnF = len(respfreq)
     else:
         raise ValueError("Z must be a FunctionFromTouchstone or ComplexFunction")
 
@@ -110,7 +113,7 @@ def GiulioAFS(Z, fmin: float, fmax: float, n_min: int = 1, n_max: int = 20, tol_
             else:
                 print("Not satisfied: ", {hi: h[i] for i, hi in enumerate(not_satisfied)})    
             
-        if not_satisfied == [] or nF == respnF:
+        if not_satisfied == [] or nF == max_n_freq:
             convergence = True
         else:
             if DEBUG and nF % 10 == 0:

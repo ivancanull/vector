@@ -36,7 +36,7 @@ model:
 case_name: filter_tcn_online_random_uaw_final
 
 train:
-  epochs: 1000
+  epochs: 10000
 
 test:
   samples: 100

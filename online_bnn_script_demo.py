@@ -1,7 +1,4 @@
-import argparse
-
 from matplotlib.style import available
-from numpy import s_
 from src import *
 
 from torch.utils.data import random_split
@@ -113,48 +110,48 @@ def uncertainty_aware_resample_dataset(freqs,
 
     errors = []
     sample_idx = sample_idx.tolist()  # convert to list for easier indexing
-
-    for j in range(data_sample_size):
-        # distribute the frequencies according to the uncertainties
-        if freq_sample_method == "uniform":
-            sample_freq = uniform_distribute(freqs, freq_sample_size)
-        elif freq_sample_method == "random":
-            sample_freq = np.sort(np.random.choice(freqs, size=freq_sample_size, replace=False))
-        elif freq_sample_method == "uncertainty_aware":
-            sample_freq = np.sort(partition_by_uncertainty(freqs, np.sum(uncertainties[sample_idx_[j]], axis=1), freq_sample_size))
-        else:
-            raise ValueError(f"Unknown sample method: {freq_sample_method}")
-        
-        sample_freq_idx = locate_freqs_idx(freqs, sample_freq)
-        for k, pc in enumerate(port_combinations):
-            init_poles = basic_poles_initialize(freqs_range=(freqs[0], freqs[-1]), n_poles_real=n_poles_real, n_poles_complex=n_poles_complex) # Pre defined values for the poles
-            poles, residues, d, h = vector_fit(sample_freq, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], sample_freq_idx], init_poles=init_poles, max_iter=30, tol=1e-7, atol=1e-7, rtol=1e-7)
-            s_params_fit = evaluate(poles, residues, d, h, frequency_to_s(freqs))
-            # plot
-            nrmse_error = fitted_error_estimate(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]], s_params_fit, method="MSE", norm="range")
-            # if nrmse_error > 0.1:
-            #     fig, axes = plt.subplots(3, 1, figsize=(12, 9))
-            #     axes[0].plot(freqs, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :].real, label='True real', color='blue')
-            #     axes[0].plot(freqs, s_params_fit.real, label='Fitted real', linestyle='dashed', color='orange')
-            #     axes[0].set_xlabel('Frequency (Hz)')
-            #     axes[0].set_ylabel('Real Part')
-            #     axes[0].legend()
-            #     axes[1].plot(freqs, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :].imag, label='True imag', color='blue')
-            #     axes[1].plot(freqs, s_params_fit.imag, label='Fitted imag', linestyle='dashed', color='orange')
-            #     axes[1].set_xlabel('Frequency (Hz)')
-            #     axes[1].set_ylabel('Imaginary Part')
-            #     axes[1].legend()
-            #     axes[2].plot(freqs, 20 * np.log10(np.abs(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :])), label='True Abs', color='blue')
-            #     axes[2].plot(freqs, 20 * np.log10(np.abs(s_params_fit)), label='Fitted Abs', linestyle='dashed', color='orange')
-            #     axes[2].set_xlabel('Frequency (Hz)')
-            #     axes[2].set_ylabel('Magnitude (dB)')
-            #     plt.savefig(f'temp/{save_name}_vf_{j}_{pc}.png')
-            #     plt.close()
-            # calculate the l2 error
-            nrmse_error = fitted_error_estimate(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]], s_params_fit, method="MSE", norm="range")
-            errors.append(nrmse_error)
-            # set the s_params_fit to the dataset
-            dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]] = s_params_fit
+    # sample freq if is not "full"
+    if freq_sample_method != "full":
+        for j in range(data_sample_size):
+            # distribute the frequencies according to the uncertainties
+            if freq_sample_method == "uniform":
+                sample_freq = uniform_distribute(freqs, freq_sample_size)
+            elif freq_sample_method == "random":
+                sample_freq = np.sort(np.random.choice(freqs, size=freq_sample_size, replace=False))
+            elif freq_sample_method == "uncertainty_aware":
+                sample_freq = np.sort(partition_by_uncertainty(freqs, np.sum(uncertainties[sample_idx_[j]], axis=1), freq_sample_size))
+            else:
+                raise ValueError(f"Unknown sample method: {freq_sample_method}")
+            sample_freq_idx = locate_freqs_idx(freqs, sample_freq)
+            for k, pc in enumerate(port_combinations):
+                init_poles = basic_poles_initialize(freqs_range=(freqs[0], freqs[-1]), n_poles_real=n_poles_real, n_poles_complex=n_poles_complex) # Pre defined values for the poles
+                poles, residues, d, h = vector_fit(sample_freq, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], sample_freq_idx], init_poles=init_poles, max_iter=30, tol=1e-7, atol=1e-7, rtol=1e-7)
+                s_params_fit = evaluate(poles, residues, d, h, frequency_to_s(freqs))
+                # plot
+                nrmse_error = fitted_error_estimate(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]], s_params_fit, method="MSE", norm="range")
+                # if nrmse_error > 0.1:
+                #     fig, axes = plt.subplots(3, 1, figsize=(12, 9))
+                #     axes[0].plot(freqs, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :].real, label='True real', color='blue')
+                #     axes[0].plot(freqs, s_params_fit.real, label='Fitted real', linestyle='dashed', color='orange')
+                #     axes[0].set_xlabel('Frequency (Hz)')
+                #     axes[0].set_ylabel('Real Part')
+                #     axes[0].legend()
+                #     axes[1].plot(freqs, dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :].imag, label='True imag', color='blue')
+                #     axes[1].plot(freqs, s_params_fit.imag, label='Fitted imag', linestyle='dashed', color='orange')
+                #     axes[1].set_xlabel('Frequency (Hz)')
+                #     axes[1].set_ylabel('Imaginary Part')
+                #     axes[1].legend()
+                #     axes[2].plot(freqs, 20 * np.log10(np.abs(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1], :])), label='True Abs', color='blue')
+                #     axes[2].plot(freqs, 20 * np.log10(np.abs(s_params_fit)), label='Fitted Abs', linestyle='dashed', color='orange')
+                #     axes[2].set_xlabel('Frequency (Hz)')
+                #     axes[2].set_ylabel('Magnitude (dB)')
+                #     plt.savefig(f'temp/{save_name}_vf_{j}_{pc}.png')
+                #     plt.close()
+                # calculate the l2 error
+                nrmse_error = fitted_error_estimate(dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]], s_params_fit, method="MSE", norm="range")
+                errors.append(nrmse_error)
+                # set the s_params_fit to the dataset
+                dataset.dataset[sample_idx[j]]["s_params"][pc[0], pc[1]] = s_params_fit
     errors = np.stack(errors, axis=0)
 
     dataset.remove_idx(sample_idx)  # remove the sample idx from the dataset
@@ -312,6 +309,7 @@ def main():
 
             if i == 0:
                 dataset.random_sample_idx(config.online.data_sample_size)
+                dataset.extend_history_idx(dataset.get_sample_idx())  # extend the history idx with the sample idx
             else:
                 dataset, errors = uncertainty_aware_resample_dataset(
                     freqs, 
@@ -359,6 +357,7 @@ def main():
             # validate
             online_validate(dataset, val_idx, net, regularizer, device, config.test.samples)
 
+        return
         net.unfreeze()  # unfreeze the model before saving
         torch.save(net.state_dict(), guide_model_path)
         # save the online dataset

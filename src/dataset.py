@@ -303,8 +303,10 @@ class SPOnlineDataset(SPDataset):
         - sample_size (int): Size of the sanpling set.
         """
         if sample_size > len(self.dataset):
-            raise ValueError("Train size exceeds dataset size.")
-        self.sample_idx = np.random.choice(self.available_idx, sample_size, replace=False).tolist()
+            print("Train size exceeds dataset size.")
+            self.sample_idx = self.available_idx
+        else:
+            self.sample_idx = np.random.choice(self.available_idx, sample_size, replace=False).tolist()
 
     def remove_idx(self, indices):
         """
