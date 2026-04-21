@@ -1,0 +1,4 @@
+queue_root: queue
+database_path: database/experiments.db
+poll_seconds: 2.0
+max_pending_jobs: 100
