@@ -1,0 +1,17 @@
+{
+  "batch_id": "spiral_demo_local",
+  "template_name": "si_template_v1",
+  "metrics_to_extract": ["max_s11_db", "min_s21_db"],
+  "cases": [
+    {
+      "case_id": "c01",
+      "variables": {
+        "Din": "55um",
+        "H": "2um",
+        "S": "1.5um",
+        "W": "15um"
+      },
+      "output_filename": "spiral_demo_local_c01.s2p"
+    }
+  ]
+}

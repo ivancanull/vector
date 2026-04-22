@@ -1,0 +1,6 @@
+templates:
+  si_template_v1:
+    project_path: "D:/ansys/spiral_inductor_example.aedt"
+    design_name: "HFSSDesign1"
+    setup_name: "Setup1"
+    sweep_name: "Sweep"

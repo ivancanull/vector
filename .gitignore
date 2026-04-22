@@ -189,3 +189,12 @@ data/
 *.pth
 *.pth.*
 plot_utils.py
+
+# queue runtime artifacts (never publish queue contents)
+/queue/**
+
+# explicit queue artifact patterns
+/queue/**/*.json
+/queue/**/*.csv
+/queue/**/*.snp
+/queue/**/*.s?p
