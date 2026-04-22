@@ -1,0 +1,14 @@
+{
+  "job_id": "spiral_batch_20260422_c01",
+  "status": "failed",
+  "worker_name": "hfss_win01",
+  "start_time": "2026-04-22T08:10:00Z",
+  "finish_time": "2026-04-22T08:11:00Z",
+  "metrics": null,
+  "artifacts": {
+    "touchstone": null,
+    "csv": null,
+    "log": "results/spiral_batch_20260422_c01.log"
+  },
+  "error_message": "mesh_failure"
+}

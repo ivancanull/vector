@@ -1,0 +1,24 @@
+{
+  "job_id": "spiral_batch_20260422_c01",
+  "template_name": "si_template_v1",
+  "variables": {
+    "Din": "55um",
+    "H": "2um",
+    "S": "1.5um",
+    "W": "15um"
+  },
+  "output_filename": "spiral_Din55_S1d5_W15.s2p",
+  "submit_time": "2026-04-22T08:00:00Z",
+  "metrics_to_extract": [
+    "max_s11_db",
+    "min_s21_db"
+  ],
+  "design_name": "HFSSDesign1",
+  "setup_name": "Setup1",
+  "sweep_name": "Sweep",
+  "artifact_options": {
+    "export_touchstone": true,
+    "export_csv": true
+  },
+  "retry_count": 0
+}

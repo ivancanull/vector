@@ -73,6 +73,21 @@ Queue emission from this example:
 - `queue/pending/batch_20260422_c01.json`
 - `queue/pending/batch_20260422_c02.json`
 
+## Template Files
+
+Ready-to-copy JSON templates are provided in `templates/`:
+
+- `templates/queue_job_template.json`
+- `templates/queue_batch_submit_template.json`
+- `templates/queue_result_done_template.json`
+- `templates/queue_result_failed_template.json`
+
+Usage notes:
+
+- Copy the queue job template into `queue/pending/<job_id>.json` for single-case runs.
+- Use the batch template with `scripts/server/submit_spiral_batch.py` to emit per-case pending jobs.
+- `queue_result_done_template.json` and `queue_result_failed_template.json` document the expected result payloads under `queue/done` and `queue/failed`.
+
 ## Naming and Unit Rules
 
 - `variables` values must include explicit units (`55um`, `1.0mm`, `2.4GHz`).
