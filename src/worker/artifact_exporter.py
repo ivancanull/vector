@@ -20,9 +20,26 @@ class LocalArtifactPaths:
 def build_artifact_paths(job_id: str, cfg: WorkerConfig) -> LocalArtifactPaths:
     results_dir = cfg.results_dir
     results_dir.mkdir(parents=True, exist_ok=True)
+    return build_artifact_paths_with_name(job_id, cfg, output_filename=None)
+
+
+def build_artifact_paths_with_name(
+    job_id: str, cfg: WorkerConfig, output_filename: str | None
+) -> LocalArtifactPaths:
+    results_dir = cfg.results_dir
+    results_dir.mkdir(parents=True, exist_ok=True)
+    if output_filename:
+        touchstone_name = Path(output_filename).name
+        touchstone_path = results_dir / touchstone_name
+        stem = Path(touchstone_name).stem
+        csv_path = results_dir / f"{stem}.csv"
+    else:
+        touchstone_path = results_dir / f"{job_id}.s2p"
+        csv_path = results_dir / f"{job_id}.csv"
+
     return LocalArtifactPaths(
-        touchstone=results_dir / f"{job_id}.s2p",
-        csv=results_dir / f"{job_id}.csv",
+        touchstone=touchstone_path,
+        csv=csv_path,
         log=results_dir / f"{job_id}.log",
     )
 

@@ -1,4 +1,4 @@
-from src.common.job_types import SimulationJob
+from common.job_types import SimulationJob
 
 
 class Optimizer:
@@ -10,8 +10,10 @@ class Optimizer:
             jobs.append(
                 SimulationJob(
                     job_id=f"job_{idx}",
-                    design_type="placeholder",
-                    parameters={"x": float(idx)},
+                    template_name="si_template_v1",
+                    variables={"x": f"{float(idx)}mm"},
+                    output_filename=f"job_{idx}.s2p",
+                    metrics_to_extract=["max_s11_db"],
                 )
             )
         return jobs

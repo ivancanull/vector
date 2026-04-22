@@ -54,6 +54,35 @@ def _copy_job_log(job_logger, job_log_src: Path, log_artifact_target: Path) -> N
     shutil.copy2(job_log_src, log_artifact_target)
 
 
+def _persist_failure_result(
+    *,
+    queue_root: Path,
+    worker_name: str,
+    job_id: str,
+    running_job_path: Path,
+    start_time,
+    finish_time,
+    result_artifacts: ArtifactPaths,
+    job_logger,
+    job_log_src: Path,
+    results_dir: Path,
+    error_message: str,
+) -> None:
+    log_artifact_target = results_dir / f"{job_id}.log"
+    _copy_job_log(job_logger, job_log_src, log_artifact_target)
+    result_artifacts.log = as_posix_rel(log_artifact_target, queue_root)
+    write_failure_result(
+        queue_root=queue_root,
+        worker_name=worker_name,
+        job_id=job_id,
+        running_job_path=running_job_path,
+        start_time=start_time,
+        finish_time=finish_time,
+        artifacts=result_artifacts,
+        error_message=error_message,
+    )
+
+
 def process_claimed_job(
     running_job_path: Path,
     cfg,
@@ -117,17 +146,17 @@ def process_claimed_job(
     except WorkerError as exc:
         finish_time = utc_now()
         job_logger.exception("job failed with WorkerError=%s", exc.failure_class)
-        log_artifact_target = cfg.results_dir / f"{job_id}.log"
-        _copy_job_log(job_logger, job_log_src, log_artifact_target)
-        result_artifacts.log = as_posix_rel(log_artifact_target, cfg.queue_root)
-        write_failure_result(
+        _persist_failure_result(
             queue_root=cfg.queue_root,
             worker_name=cfg.worker_name,
             job_id=job_id,
             running_job_path=running_job_path,
             start_time=start_time,
             finish_time=finish_time,
-            artifacts=result_artifacts,
+            result_artifacts=result_artifacts,
+            job_logger=job_logger,
+            job_log_src=job_log_src,
+            results_dir=cfg.results_dir,
             error_message=exc.failure_class,
         )
         global_logger.info("job marked failed job_id=%s error=%s", job_id, exc.failure_class)
@@ -135,17 +164,17 @@ def process_claimed_job(
         finish_time = utc_now()
         traceback_text = traceback.format_exc()
         job_logger.error("unexpected exception\n%s", traceback_text)
-        log_artifact_target = cfg.results_dir / f"{job_id}.log"
-        _copy_job_log(job_logger, job_log_src, log_artifact_target)
-        result_artifacts.log = as_posix_rel(log_artifact_target, cfg.queue_root)
-        write_failure_result(
+        _persist_failure_result(
             queue_root=cfg.queue_root,
             worker_name=cfg.worker_name,
             job_id=job_id,
             running_job_path=running_job_path,
             start_time=start_time,
             finish_time=finish_time,
-            artifacts=result_artifacts,
+            result_artifacts=result_artifacts,
+            job_logger=job_logger,
+            job_log_src=job_log_src,
+            results_dir=cfg.results_dir,
             error_message="unexpected_exception",
         )
         global_logger.info("job marked failed job_id=%s error=unexpected_exception", job_id)

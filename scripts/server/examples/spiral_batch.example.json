@@ -1,0 +1,24 @@
+{
+  "batch_id": "spiral_batch_20260422",
+  "template_name": "si_template_v1",
+  "design_name": "HFSSDesign1",
+  "setup_name": "SI",
+  "sweep_name": "Sweep1",
+  "metrics_to_extract": ["max_s11_db", "min_s21_db"],
+  "artifact_options": {
+    "export_touchstone": true,
+    "export_csv": true
+  },
+  "cases": [
+    {
+      "case_id": "c01",
+      "variables": {
+        "Din": "55um",
+        "H": "2um",
+        "S": "1.5um",
+        "W": "15um"
+      },
+      "output_filename": "spiral_Din55_S1d5_W15.s2p"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from pathlib import Path
 
 from worker.artifact_exporter import (
-    build_artifact_paths,
+    build_artifact_paths_with_name,
     export_csv_from_touchstone,
     to_result_artifacts,
     verify_artifacts_exist,
@@ -30,14 +30,32 @@ def _import_hfss_class():
 
 def open_hfss_session(project_path: str, design_name: str, non_graphical: bool, new_desktop: bool):
     Hfss = _import_hfss_class()
+
+    def _open_with_kwargs(**kwargs):
+        try:
+            return Hfss(
+                project=project_path,
+                design=design_name,
+                non_graphical=non_graphical,
+                new_desktop_session=new_desktop,
+                **kwargs,
+            )
+        except TypeError:
+            return Hfss(
+                project=project_path,
+                design=design_name,
+                non_graphical=non_graphical,
+                new_desktop=new_desktop,
+                **kwargs,
+            )
+
     try:
-        hfss = Hfss(
-            project=project_path,
-            design=design_name,
-            non_graphical=non_graphical,
-            new_desktop_session=new_desktop,
-            close_on_exit=False,
-        )
+        try:
+            hfss = _open_with_kwargs()
+        except RuntimeError as exc:
+            if "Project is locked" not in str(exc):
+                raise
+            hfss = _open_with_kwargs(remove_lock=True)
         return hfss
     except Exception as exc:
         raise WorkerError("hfss_start_failure", f"Failed to open HFSS session: {exc}") from exc
@@ -65,14 +83,26 @@ def run_analysis(hfss, setup_name: str) -> None:
 def export_touchstone(hfss, setup_name: str, sweep_name: str, out_path: Path) -> str:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
+        # Official PyAEDT user-guide/API signature.
         exported = hfss.export_touchstone(
-            setup_name=setup_name,
-            sweep_name=sweep_name,
-            file_name=str(out_path),
+            setup=setup_name,
+            sweep=sweep_name,
+            output_file=str(out_path),
         )
     except TypeError:
         try:
-            exported = hfss.export_touchstone(file_name=str(out_path))
+            # Backward-compat signature used by some releases.
+            exported = hfss.export_touchstone(
+                setup_name=setup_name,
+                sweep_name=sweep_name,
+                file_name=str(out_path),
+            )
+        except TypeError:
+            # Minimal fallback when only file target is supported.
+            try:
+                exported = hfss.export_touchstone(file_name=str(out_path))
+            except Exception as exc:
+                raise WorkerError("export_failure", f"Touchstone export failed: {exc}") from exc
         except Exception as exc:
             raise WorkerError("export_failure", f"Touchstone export failed: {exc}") from exc
     except Exception as exc:
@@ -111,7 +141,11 @@ def _execute(job: JobRequest, template_cfg: ResolvedTemplate, worker_cfg: Worker
             "metrics_to_extract requires touchstone export to be enabled",
         )
 
-    local_artifacts = build_artifact_paths(job.job_id, worker_cfg)
+    local_artifacts = build_artifact_paths_with_name(
+        job.job_id,
+        worker_cfg,
+        output_filename=job.output_filename,
+    )
     hfss = None
     try:
         hfss = open_hfss_session(

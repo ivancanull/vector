@@ -14,6 +14,7 @@ def _job() -> JobRequest:
             "setup_name": "Setup1",
             "sweep_name": "Sweep1",
             "variables": {"L": "7.8mm"},
+            "output_filename": "bclf_000001.s2p",
             "metrics_to_extract": ["max_s11_db"],
             "artifact_options": {"export_touchstone": True, "export_csv": True},
             "submit_time": "2026-04-21T12:00:00Z",

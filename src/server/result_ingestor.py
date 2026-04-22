@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.common.io_utils import read_json
+from common.io_utils import read_json
 
 from .db import ExperimentDB
 
@@ -24,7 +24,7 @@ class ResultIngestor:
                 """,
                 (
                     payload["job_id"],
-                    payload.get("design_type", "unknown"),
+                    payload.get("template_name", payload.get("design_type", "unknown")),
                     payload.get("status", "done"),
                     str(payload.get("metrics", {})),
                 ),

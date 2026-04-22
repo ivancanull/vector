@@ -43,11 +43,12 @@ class JobRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     job_id: str = Field(min_length=1)
-    design_name: str = Field(min_length=1)
+    design_name: str | None = None
     template_name: str = Field(min_length=1)
     setup_name: str | None = None
     sweep_name: str | None = None
     variables: dict[str, str]
+    output_filename: str = Field(min_length=1)
     metrics_to_extract: list[str]
     artifact_options: ArtifactOptions = Field(default_factory=ArtifactOptions)
     submit_time: datetime
@@ -72,6 +73,14 @@ class JobRequest(BaseModel):
             raise ValueError("metrics_to_extract must contain at least one metric")
         for metric in value:
             MetricRequest(name=metric)
+        return value
+
+    @field_validator("output_filename")
+    @classmethod
+    def validate_output_filename(cls, value: str) -> str:
+        suffix = Path(value).suffix.lower()
+        if not (suffix.startswith(".s") and suffix.endswith("p")):
+            raise ValueError("output_filename must be a Touchstone file name like .s2p")
         return value
 
 

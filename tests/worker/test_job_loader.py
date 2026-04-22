@@ -33,6 +33,7 @@ def _valid_payload() -> dict:
         "setup_name": "Setup1",
         "sweep_name": "Sweep1",
         "variables": {"L": "7.8mm", "W": "1.0mm"},
+        "output_filename": "bclf_000001.s2p",
         "metrics_to_extract": ["max_s11_db", "min_s21_db"],
         "artifact_options": {"export_touchstone": True, "export_csv": True},
         "submit_time": "2026-04-21T12:00:00Z",
@@ -78,3 +79,14 @@ def test_unknown_metric_fails(tmp_path: Path) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(WorkerError):
         load_job(path, registry)
+
+
+def test_missing_output_filename_fails(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    payload = _valid_payload()
+    del payload["output_filename"]
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(WorkerError) as exc:
+        load_job(path, registry)
+    assert exc.value.failure_class == "invalid_job_json"
