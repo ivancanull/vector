@@ -17,12 +17,6 @@ class LocalArtifactPaths:
     log: Path
 
 
-def build_artifact_paths(job_id: str, cfg: WorkerConfig) -> LocalArtifactPaths:
-    results_dir = cfg.results_dir
-    results_dir.mkdir(parents=True, exist_ok=True)
-    return build_artifact_paths_with_name(job_id, cfg, output_filename=None)
-
-
 def build_artifact_paths_with_name(
     job_id: str, cfg: WorkerConfig, output_filename: str | None
 ) -> LocalArtifactPaths:

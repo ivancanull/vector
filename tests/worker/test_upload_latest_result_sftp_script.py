@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import sys
 import time
 
 from common.io_utils import write_json
 from scripts.worker import upload_latest_result_sftp
+
+
+def test_parse_args_uses_default_ssh_files(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["upload_latest_result_sftp.py"])
+    args = upload_latest_result_sftp.parse_args()
+    assert args.ssh_key == upload_latest_result_sftp.DEFAULT_SSH_KEY
+    assert args.known_hosts == upload_latest_result_sftp.DEFAULT_KNOWN_HOSTS
 
 
 def test_find_latest_result_json_across_done_failed(tmp_path: Path) -> None:

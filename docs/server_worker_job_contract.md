@@ -1,5 +1,9 @@
 # Server-Worker Job Contract
 
+For an end-to-end server-worker smoke workflow, including the SFTP worker loop
+and five-random-case submit/watch script, see
+`docs/server_worker_coherent_test.md`.
+
 ## Canonical Worker Job JSON
 
 Each file in `queue/pending/*.json` must represent exactly one worker case.

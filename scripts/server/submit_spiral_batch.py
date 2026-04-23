@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+# Recommended fixed-batch server command:
+#
+#   cd /home/zhanghf/projects/vector
+#   PYTHONPATH=src:. python scripts/server/submit_spiral_batch.py \
+#     --batch scripts/server/examples/spiral_batch.example.json \
+#     --queue-root queue
+#
+# This script only submits JSON files to queue/pending. Start a worker separately
+# to claim, run, and upload result files.
+
 import argparse
 import json
 import sys

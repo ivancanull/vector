@@ -55,8 +55,3 @@ def build_spiral_inductor_export_path(
         + str_p(W)
         + extension
     )
-
-
-if __name__ == "__main__":
-    print(build_spiral_inductor_param_string(55, 2, 1.5, 15))
-    print(build_spiral_inductor_export_path(55, 1.5, 15))

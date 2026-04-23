@@ -1,5 +1,9 @@
 # SSH/SFTP-Based Cross-Network File Exchange for Windows HFSS + Linux Orchestrator
 
+For the current coherent test workflow, use
+`docs/server_worker_coherent_test.md`. It includes the long-running worker SFTP
+loop command and the server-side five-random-case submit/watch command.
+
 ## Goal
 
 Use **SSH/SFTP** instead of Samba for cross-network file exchange between:
@@ -75,10 +79,14 @@ Recommended local example for this repo:
 
 Use the worker-side upload script to send one completed job bundle to the server over SFTP.
 
+For normal testing, prefer `scripts/worker/run_queue_loop_sftp.py`; it claims
+jobs, runs HFSS, uploads result bundles, and archives completed local result
+JSONs in one loop.
+
 ### Required setup
 
-- SSH private key file on worker machine (for user `zhanghf`)
-- `known_hosts` entry containing `10.15.89.240:22031` host key
+- SSH private key file on worker machine (for user `zhanghf`), defaulting to `%USERPROFILE%\.ssh\id_ed25519`
+- `known_hosts` entry containing `10.15.89.240:22031` host key, defaulting to `%USERPROFILE%\.ssh\known_hosts`
 
 ### Command
 
@@ -90,18 +98,14 @@ Upload latest result bundle from local queue:
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
-  --remote-queue-root /home/zhanghf/projects/vector/queue `
-  --ssh-key <path-to-private-key> `
-  --known-hosts <path-to-known_hosts>
+  --remote-queue-root /home/zhanghf/projects/vector/queue
 ```
 
 Upload a specific result JSON:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\upload_latest_result_sftp.py `
-  --result-json D:\vector\queue\done\<job_id>.result.json `
-  --ssh-key <path-to-private-key> `
-  --known-hosts <path-to-known_hosts>
+  --result-json D:\vector\queue\done\<job_id>.result.json
 ```
 
 ### Uploaded file set per job

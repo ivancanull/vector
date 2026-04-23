@@ -2,35 +2,17 @@ from __future__ import annotations
 
 import json
 import shutil
-import signal
-import sys
-import time
 import traceback
 from pathlib import Path
 
-from common.paths import ensure_runtime_dirs
-from worker.config import load_templates_config, load_worker_config
 from worker.hfss_api import execute_job
 from worker.job_loader import load_job
-from worker.logger import get_job_logger, setup_global_logger
+from worker.logger import get_job_logger
 from worker.metrics import compute_metrics
-from worker.queue_watcher import try_claim_one_job
 from worker.schemas import ArtifactPaths, JobRequest
 from worker.state_manager import write_failure_result, write_success_result
 from worker.template_registry import TemplateRegistry
 from worker.utils import WorkerError, as_posix_rel, utc_now
-
-
-class ShutdownSignal:
-    def __init__(self) -> None:
-        self._should_stop = False
-
-    @property
-    def should_stop(self) -> bool:
-        return self._should_stop
-
-    def request_stop(self, *_args) -> None:
-        self._should_stop = True
 
 
 def _extract_job_id_fallback(running_job_path: Path) -> str:
@@ -178,36 +160,3 @@ def process_claimed_job(
             error_message="unexpected_exception",
         )
         global_logger.info("job marked failed job_id=%s error=unexpected_exception", job_id)
-
-
-def run(worker_config_path: Path) -> int:
-    cfg = load_worker_config(worker_config_path)
-    templates_cfg = load_templates_config(cfg.templates_yaml)
-    ensure_runtime_dirs(cfg.queue_root, cfg.logs_dir)
-    template_registry = TemplateRegistry(templates_cfg)
-    global_logger = setup_global_logger(cfg.logs_dir)
-    global_logger.info("worker start worker_name=%s", cfg.worker_name)
-    global_logger.info("config loaded queue_root=%s", cfg.queue_root)
-
-    shutdown_signal = ShutdownSignal()
-    signal.signal(signal.SIGINT, shutdown_signal.request_stop)
-    signal.signal(signal.SIGTERM, shutdown_signal.request_stop)
-
-    while not shutdown_signal.should_stop:
-        try:
-            claimed = try_claim_one_job(cfg.queue_root)
-            if claimed is None:
-                time.sleep(cfg.poll_interval_sec)
-                continue
-            process_claimed_job(claimed, cfg, template_registry, global_logger)
-        except Exception:
-            global_logger.exception("top-level worker loop exception")
-            time.sleep(cfg.claim_retry_sec)
-
-    global_logger.info("worker shutdown")
-    return 0
-
-
-if __name__ == "__main__":
-    config_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("configs/worker.yaml")
-    raise SystemExit(run(config_path))

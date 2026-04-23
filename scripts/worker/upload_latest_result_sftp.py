@@ -18,6 +18,8 @@ DEFAULT_SERVER_HOST = "10.15.89.240"
 DEFAULT_SERVER_PORT = 22031
 DEFAULT_USERNAME = "zhanghf"
 DEFAULT_REMOTE_QUEUE_ROOT = "/home/zhanghf/projects/vector/queue"
+DEFAULT_SSH_KEY = Path.home() / ".ssh" / "id_ed25519"
+DEFAULT_KNOWN_HOSTS = Path.home() / ".ssh" / "known_hosts"
 
 
 def _find_latest_result_json(queue_root: Path) -> Path | None:
@@ -37,8 +39,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--server-port", type=int, default=DEFAULT_SERVER_PORT)
     parser.add_argument("--username", default=DEFAULT_USERNAME)
     parser.add_argument("--remote-queue-root", default=DEFAULT_REMOTE_QUEUE_ROOT)
-    parser.add_argument("--ssh-key", type=Path, required=True)
-    parser.add_argument("--known-hosts", type=Path, required=True)
+    parser.add_argument(
+        "--ssh-key",
+        type=Path,
+        default=DEFAULT_SSH_KEY,
+        help=f"SSH private key path. Default: {DEFAULT_SSH_KEY}",
+    )
+    parser.add_argument(
+        "--known-hosts",
+        type=Path,
+        default=DEFAULT_KNOWN_HOSTS,
+        help=f"known_hosts path. Default: {DEFAULT_KNOWN_HOSTS}",
+    )
     parser.add_argument(
         "--result-json",
         type=Path,
