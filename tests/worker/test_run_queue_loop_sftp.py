@@ -168,7 +168,9 @@ def test_claim_one_remote_job_renames_and_downloads(monkeypatch, tmp_path: Path)
     assert read_json(claimed.local_job_path)["job_id"] == "job_001"
 
 
-def test_success_path_uploads_and_archives(monkeypatch, tmp_path: Path) -> None:
+def test_success_path_uploads_and_leaves_remote_archive_to_server(
+    monkeypatch, tmp_path: Path
+) -> None:
     sftp = _FakeSFTP()
     _seed_remote_pending(sftp, "job_002")
     ctx = _ctx(tmp_path, monkeypatch, sftp)
@@ -202,7 +204,8 @@ def test_success_path_uploads_and_archives(monkeypatch, tmp_path: Path) -> None:
     assert (ctx.queue_root / "archive" / "done" / "job_002.result.json").exists()
     assert "/remote/queue/done/job_002.result.json" in sftp.files
     assert "/remote/queue/results/job_002.s2p" in sftp.files
-    assert "/remote/queue/archive/running/job_002.json" in sftp.files
+    assert "/remote/queue/running/job_002.json" in sftp.files
+    assert "/remote/queue/archive/running/job_002.json" not in sftp.files
 
 
 def test_failed_subprocess_result_uploads_and_archives(monkeypatch, tmp_path: Path) -> None:
@@ -234,7 +237,8 @@ def test_failed_subprocess_result_uploads_and_archives(monkeypatch, tmp_path: Pa
     assert (ctx.queue_root / "archive" / "failed" / "job_003.result.json").exists()
     assert "/remote/queue/failed/job_003.result.json" in sftp.files
     assert "/remote/queue/results/job_003.log" in sftp.files
-    assert "/remote/queue/archive/running/job_003.json" in sftp.files
+    assert "/remote/queue/running/job_003.json" in sftp.files
+    assert "/remote/queue/archive/running/job_003.json" not in sftp.files
 
 
 def test_timeout_writes_failed_result_uploads_and_archives(monkeypatch, tmp_path: Path) -> None:
@@ -254,7 +258,8 @@ def test_timeout_writes_failed_result_uploads_and_archives(monkeypatch, tmp_path
     assert read_json(archived)["error_message"] == "job_timeout"
     assert (ctx.queue_root / "archive" / "running" / "job_004.json").exists()
     assert "/remote/queue/failed/job_004.result.json" in sftp.files
-    assert "/remote/queue/archive/running/job_004.json" in sftp.files
+    assert "/remote/queue/running/job_004.json" in sftp.files
+    assert "/remote/queue/archive/running/job_004.json" not in sftp.files
 
 
 def test_stale_local_running_job_uploads_and_archives(monkeypatch, tmp_path: Path) -> None:
@@ -274,7 +279,8 @@ def test_stale_local_running_job_uploads_and_archives(monkeypatch, tmp_path: Pat
     assert read_json(archived)["error_message"] == "stale_running_job"
     assert (ctx.queue_root / "archive" / "running" / "job_005.json").exists()
     assert "/remote/queue/failed/job_005.result.json" in sftp.files
-    assert "/remote/queue/archive/running/job_005.json" in sftp.files
+    assert "/remote/queue/running/job_005.json" in sftp.files
+    assert "/remote/queue/archive/running/job_005.json" not in sftp.files
 
 
 def test_archived_results_are_not_reuploaded(monkeypatch, tmp_path: Path) -> None:
@@ -292,12 +298,8 @@ def test_archived_results_are_not_reuploaded(monkeypatch, tmp_path: Path) -> Non
         },
     )
 
-    def _unexpected_upload(*_args, **_kwargs):
-        raise AssertionError("archived result should not be uploaded")
-
-    monkeypatch.setattr(run_queue_loop_sftp, "upload_job_bundle_via_sftp", _unexpected_upload)
-
     assert run_queue_loop_sftp.run_loop(ctx, once=True) == 0
+    assert sftp.files == {}
 
 
 def test_unarchived_local_result_is_uploaded_once_and_archived(
@@ -326,4 +328,5 @@ def test_unarchived_local_result_is_uploaded_once_and_archived(
     assert not (ctx.queue_root / "failed" / "job_007.result.json").exists()
     assert (ctx.queue_root / "archive" / "failed" / "job_007.result.json").exists()
     assert "/remote/queue/failed/job_007.result.json" in sftp.files
-    assert "/remote/queue/archive/running/job_007.json" in sftp.files
+    assert "/remote/queue/running/job_007.json" in sftp.files
+    assert "/remote/queue/archive/running/job_007.json" not in sftp.files

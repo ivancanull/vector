@@ -42,20 +42,25 @@ def test_run_upload_with_explicit_result_json_bypasses_latest(
 
     captured = {}
 
-    def _fake_upload(**kwargs):
-        captured.update(kwargs)
-        return type(
-            "Summary",
-            (),
-            {
-                "result_json_path": kwargs["result_json_path"],
-                "uploaded_remote_paths": ["/home/zhanghf/projects/vector/queue/done/job_001.result.json"],
-                "total_bytes": 123,
-                "status": "uploaded",
-            },
-        )()
+    class _FakeUploader:
+        def __init__(self, *, queue_root, settings):
+            captured["queue_root"] = queue_root
+            captured["settings"] = settings
 
-    monkeypatch.setattr(upload_latest_result_sftp, "upload_job_bundle_via_sftp", _fake_upload)
+        def upload(self, result_json_path):
+            captured["result_json_path"] = result_json_path
+            return type(
+                "Summary",
+                (),
+                {
+                    "result_json_path": result_json_path,
+                    "uploaded_remote_paths": ["/home/zhanghf/projects/vector/queue/done/job_001.result.json"],
+                    "total_bytes": 123,
+                    "status": "uploaded",
+                },
+            )()
+
+    monkeypatch.setattr(upload_latest_result_sftp, "SftpResultUploader", _FakeUploader)
     rc = upload_latest_result_sftp.run_upload(
         queue_root=queue_root,
         server_host="10.15.89.240",

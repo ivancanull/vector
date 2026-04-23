@@ -11,7 +11,6 @@ from typing import Callable, Protocol
 
 from common.io_utils import atomic_write_json, read_json
 from common.paths import ensure_runtime_dirs
-from worker.sftp_uploader import UploadSummary, upload_job_bundle_via_sftp
 from worker.utils import as_posix_rel
 
 
@@ -41,6 +40,15 @@ class JobResult:
 
 
 @dataclass(frozen=True)
+class UploadSummary:
+    status: str
+    result_json_path: Path
+    uploaded_remote_paths: list[str]
+    total_bytes: int
+    elapsed_seconds: float
+
+
+@dataclass(frozen=True)
 class LoopContext:
     worker_name: str
     worker_config_path: Path
@@ -55,9 +63,6 @@ class LoopContext:
 
 class RemoteQueueClient(Protocol):
     def claim_one(self) -> ClaimedJob | None:
-        ...
-
-    def archive_running(self, remote_running_path: str) -> None:
         ...
 
     def running_path_for_local_job(self, job_path: Path) -> str:
@@ -98,7 +103,7 @@ class JobRunner(Protocol):
 
 
 class ResultUploader(Protocol):
-    def upload(self, result_json_path: Path) -> None:
+    def upload(self, result_json_path: Path) -> UploadSummary:
         ...
 
 
@@ -155,6 +160,10 @@ def setup_loop_logger(logs_dir: Path) -> logging.Logger:
 
 
 def connect_sftp(settings: SftpSettings):
+    return connect_sftp_with_timeout(settings, timeout_seconds=30)
+
+
+def connect_sftp_with_timeout(settings: SftpSettings, *, timeout_seconds: int):
     if not settings.ssh_key.exists():
         raise FileNotFoundError(f"SSH key not found: {settings.ssh_key}")
     if not settings.known_hosts.exists():
@@ -172,7 +181,7 @@ def connect_sftp(settings: SftpSettings):
         key_filename=str(settings.ssh_key),
         look_for_keys=False,
         allow_agent=False,
-        timeout=30,
+        timeout=timeout_seconds,
     )
     return ssh_client, ssh_client.open_sftp()
 
@@ -196,6 +205,53 @@ def sftp_mkdir_p(sftp, remote_dir: str) -> None:
             sftp.stat(current)
         except Exception:
             sftp.mkdir(current)
+
+
+def find_result_json_for_job(queue_root: Path, job_id: str) -> Path:
+    done_path = queue_root / "done" / f"{job_id}.result.json"
+    failed_path = queue_root / "failed" / f"{job_id}.result.json"
+    if done_path.exists() and failed_path.exists():
+        return done_path if done_path.stat().st_mtime >= failed_path.stat().st_mtime else failed_path
+    if done_path.exists():
+        return done_path
+    if failed_path.exists():
+        return failed_path
+    raise FileNotFoundError(f"No done/failed result JSON found for job_id={job_id}")
+
+
+def _relative_to_queue(queue_root: Path, path: Path) -> Path:
+    return path.resolve().relative_to(queue_root.resolve())
+
+
+def _collect_upload_bundle(queue_root: Path, result_json_path: Path) -> list[tuple[Path, Path]]:
+    if not result_json_path.exists():
+        raise FileNotFoundError(f"Result JSON not found: {result_json_path}")
+
+    payload = read_json(result_json_path)
+    files: list[Path] = [result_json_path]
+    artifacts = payload.get("artifacts")
+    if isinstance(artifacts, dict):
+        for key in ("touchstone", "csv", "log"):
+            rel_path = artifacts.get(key)
+            if isinstance(rel_path, str) and rel_path:
+                files.append(queue_root / rel_path)
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in files:
+        normalized = path.resolve()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(path)
+
+    bundle: list[tuple[Path, Path]] = []
+    for local_path in deduped:
+        if not local_path.exists():
+            raise FileNotFoundError(f"Referenced artifact missing: {local_path}")
+        rel_path = _relative_to_queue(queue_root, local_path)
+        bundle.append((local_path, rel_path))
+    return bundle
 
 
 def safe_remote_rename(sftp, source: str, destination: str) -> bool:
@@ -241,15 +297,6 @@ class SftpRemoteQueueClient:
         finally:
             close_sftp(ssh_client, sftp)
         return None
-
-    def archive_running(self, remote_running_path: str) -> None:
-        name = remote_running_path.rsplit("/", 1)[-1]
-        remote_archive = remote_queue_path(self.settings, "archive", "running", name)
-        ssh_client, sftp = connect_sftp(self.settings)
-        try:
-            safe_remote_rename(sftp, remote_running_path, remote_archive)
-        finally:
-            close_sftp(ssh_client, sftp)
 
     def running_path_for_local_job(self, job_path: Path) -> str:
         return remote_queue_path(self.settings, "running", job_path.name)
@@ -437,22 +484,46 @@ class SftpResultUploader:
         *,
         queue_root: Path,
         settings: SftpSettings,
-        upload_fn: Callable[..., UploadSummary] = upload_job_bundle_via_sftp,
+        timeout_seconds: int = 30,
     ) -> None:
         self.queue_root = queue_root
         self.settings = settings
-        self.upload_fn = upload_fn
+        self.timeout_seconds = timeout_seconds
 
-    def upload(self, result_json_path: Path) -> None:
-        self.upload_fn(
-            queue_root=self.queue_root,
-            server_host=self.settings.server_host,
-            server_port=self.settings.server_port,
-            username=self.settings.username,
-            private_key_path=self.settings.ssh_key,
-            known_hosts_path=self.settings.known_hosts,
-            remote_queue_root=self.settings.remote_queue_root,
+    def upload(self, result_json_path: Path) -> UploadSummary:
+        if not self.settings.ssh_key.exists():
+            raise FileNotFoundError(f"SSH key not found: {self.settings.ssh_key}")
+        if not self.settings.known_hosts.exists():
+            raise FileNotFoundError(f"known_hosts not found: {self.settings.known_hosts}")
+
+        bundle = _collect_upload_bundle(self.queue_root, result_json_path)
+        start = time.monotonic()
+        ssh_client, sftp = connect_sftp_with_timeout(
+            self.settings,
+            timeout_seconds=self.timeout_seconds,
+        )
+        uploaded_remote_paths: list[str] = []
+        total_bytes = 0
+        try:
+            remote_root = self.settings.remote_queue_root.rstrip("/")
+            for local_path, rel_path in bundle:
+                rel_posix = rel_path.as_posix()
+                remote_path = f"{remote_root}/{rel_posix}"
+                remote_parent = remote_path.rsplit("/", 1)[0]
+                sftp_mkdir_p(sftp, remote_parent)
+                sftp.put(str(local_path), remote_path)
+                uploaded_remote_paths.append(remote_path)
+                total_bytes += local_path.stat().st_size
+        finally:
+            close_sftp(ssh_client, sftp)
+
+        elapsed = time.monotonic() - start
+        return UploadSummary(
+            status="uploaded",
             result_json_path=result_json_path,
+            uploaded_remote_paths=uploaded_remote_paths,
+            total_bytes=total_bytes,
+            elapsed_seconds=elapsed,
         )
 
 
@@ -530,8 +601,7 @@ class WorkerLoopService:
         self.uploader.upload(result_path)
         self.reporter.event(f"uploaded={result_path}")
         if remote_running_path:
-            self.remote_queue.archive_running(remote_running_path)
-            self.reporter.event(f"archived_remote_running={remote_running_path}")
+            self.reporter.event(f"remote_archive=server_managed:{remote_running_path}")
         archived = self.local_store.archive_result(result_path)
         self.reporter.event(f"archived_result={archived}")
 
@@ -541,7 +611,6 @@ def build_worker_loop_service(
     ctx: LoopContext,
     repo_root: Path,
     run_command: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    upload_fn: Callable[..., UploadSummary] = upload_job_bundle_via_sftp,
 ) -> WorkerLoopService:
     local_store = FileLocalQueueStore(
         queue_root=ctx.queue_root,
@@ -561,7 +630,6 @@ def build_worker_loop_service(
         uploader=SftpResultUploader(
             queue_root=ctx.queue_root,
             settings=ctx.sftp,
-            upload_fn=upload_fn,
         ),
         reporter=LoggingWorkerReporter(ctx.logger),
     )

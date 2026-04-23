@@ -30,9 +30,26 @@ PYTHONPATH=src:. python scripts/server/submit_random_spiral_watch.py \
 
 See `docs/server_worker_coherent_test.md` for the paired Windows worker command and troubleshooting notes.
 
+## Remote Fetch + Run + Submit
+
+Continuously fetch jobs from remote `pending`, run locally, and upload each result bundle. The server owns archiving remote `running/<job>.json` files after it reads the results.
+
+```powershell
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
+  --worker-config configs\worker.spiral_local.yaml `
+  --server-host 10.15.89.240 `
+  --server-port 22031 `
+  --username zhanghf `
+  --ssh-key C:\Users\Huifan\.ssh\id_ed25519_vector `
+  --known-hosts C:\Users\Huifan\.ssh\known_hosts `
+  --remote-queue-root /home/zhanghf/projects/vector/queue
+```
+
+When remote `pending` is empty, this script waits quietly and only prints periodic idle status. Add `--once` to process one job and exit, or `--no-wait-when-empty` to exit immediately when no job is pending.
+
 ## Worker: SFTP Queue Loop
 
-Continuously claim remote server jobs over SFTP, run each job locally, upload the result bundle, and archive uploaded local result JSONs.
+Continuously claim remote server jobs over SFTP, run each job locally, upload the result bundle, and archive uploaded local result JSONs. Remote `running/<job>.json` files are left for the server to archive.
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
@@ -61,6 +78,20 @@ Expected outputs:
 - `queue/done/<job_id>.result.json` on success
 - `queue/failed/<job_id>.result.json` on failure
 - artifacts/logs under `queue/results/`
+
+## Worker: Cleanup Test Results
+
+Delete local result JSON/artifact files only for jobs whose `job_id` starts with `test_` (keeps `exp_*`).
+
+```powershell
+.\.venv\Scripts\python.exe scripts\worker\cleanup_test_results.py --queue-root queue --job-prefix test_
+```
+
+Preview only (no deletion):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\worker\cleanup_test_results.py --queue-root queue --job-prefix test_ --dry-run
+```
 
 ## Queue Outputs
 

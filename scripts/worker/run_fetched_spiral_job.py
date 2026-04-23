@@ -66,6 +66,23 @@ def _result_paths(queue_root: Path, job_id: str) -> tuple[Path, Path]:
     )
 
 
+def _queue_root_from_job_file(job_file: Path) -> Path | None:
+    if job_file.parent.name != "running":
+        return None
+    return job_file.parent.parent
+
+
+def _remove_stale_result_files(job_file: Path, job_id: str) -> None:
+    queue_root = _queue_root_from_job_file(job_file)
+    if queue_root is None:
+        return
+    done_path, failed_path = _result_paths(queue_root, job_id)
+    for path in (done_path, failed_path):
+        if path.exists():
+            path.unlink()
+            print(f"removed_stale_result={path}")
+
+
 def _run_once(job_file: Path, worker_config_path: Path):
     cfg = load_worker_config(worker_config_path)
     templates_cfg = load_templates_config(cfg.templates_yaml)
@@ -121,6 +138,7 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
 
     job_id = _job_id_from_payload(payload, job_file)
 
+    _remove_stale_result_files(job_file, job_id)
     cfg = _run_once(job_file, worker_config_path)
     done_path, failed_path = _result_paths(cfg.queue_root, job_id)
     if done_path.exists():
@@ -162,8 +180,8 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
     if updated_payload is None or fix_name is None:
         return 1
 
-    failed_path.unlink(missing_ok=True)
     retry_job_file = _ensure_running_job_file(job_file, updated_payload, cfg.queue_root)
+    _remove_stale_result_files(retry_job_file, job_id)
     retry_cfg = _run_once(retry_job_file, retry_worker_config_path)
     retry_done_path, retry_failed_path = _result_paths(retry_cfg.queue_root, job_id)
     print(f"retry_fix={fix_name}")

@@ -10,7 +10,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from worker.sftp_uploader import upload_job_bundle_via_sftp  # noqa: E402
+from worker.queue_loop import SftpResultUploader, SftpSettings  # noqa: E402
 
 
 DEFAULT_QUEUE_ROOT = REPO_ROOT / "queue"
@@ -76,16 +76,18 @@ def run_upload(
         print("No result JSON found in queue/done or queue/failed.", file=sys.stderr)
         return 2
 
-    summary = upload_job_bundle_via_sftp(
+    uploader = SftpResultUploader(
         queue_root=queue_root,
-        server_host=server_host,
-        server_port=server_port,
-        username=username,
-        private_key_path=ssh_key,
-        known_hosts_path=known_hosts,
-        remote_queue_root=remote_queue_root,
-        result_json_path=selected,
+        settings=SftpSettings(
+            server_host=server_host,
+            server_port=server_port,
+            username=username,
+            remote_queue_root=remote_queue_root,
+            ssh_key=ssh_key,
+            known_hosts=known_hosts,
+        ),
     )
+    summary = uploader.upload(selected)
     print(f"selected_result_json={summary.result_json_path}")
     for remote in summary.uploaded_remote_paths:
         print(f"uploaded={remote}")

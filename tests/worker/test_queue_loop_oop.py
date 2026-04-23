@@ -24,7 +24,6 @@ class FakeRemoteQueue:
                 "remote_running_path": "running/demo_job_001.json",
             }
         ]
-        self.archived_remote: list[str] = []
 
     def claim_one(self) -> ClaimedJob | None:
         if not self.pending:
@@ -39,9 +38,6 @@ class FakeRemoteQueue:
             local_job_path=job_path,
             remote_running_path=payload["remote_running_path"],
         )
-
-    def archive_running(self, remote_running_path: str) -> None:
-        self.archived_remote.append(remote_running_path)
 
     def running_path_for_local_job(self, job_path: Path) -> str:
         return f"running/{job_path.name}"
@@ -160,6 +156,5 @@ def test_worker_loop_service_runs_one_fake_job_then_idles(tmp_path: Path) -> Non
 
     assert (queue_root / "archive" / "done" / "demo_job_001.result.json").exists()
     assert (queue_root / "archive" / "running" / "demo_job_001.json").exists()
-    assert remote_queue.archived_remote == ["running/demo_job_001.json"]
     assert [path.name for path in uploader.uploaded] == ["demo_job_001.result.json"]
     assert reporter.events[-1] == "idle"

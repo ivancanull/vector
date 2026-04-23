@@ -15,8 +15,8 @@ def _valid_batch_payload() -> dict:
         "batch_id": "spiral_batch_01",
         "template_name": "si_template_v1",
         "design_name": "HFSSDesign1",
-        "setup_name": "SI",
-        "sweep_name": "Sweep1",
+        "setup_name": "Setup1",
+        "sweep_name": "Sweep",
         "metrics_to_extract": ["max_s11_db", "min_s21_db"],
         "cases": [
             {

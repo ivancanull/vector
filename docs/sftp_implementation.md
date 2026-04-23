@@ -4,6 +4,9 @@ For the current coherent test workflow, use
 `docs/server_worker_coherent_test.md`. It includes the long-running worker SFTP
 loop command and the server-side five-random-case submit/watch command.
 
+For implementation status and next planned tasks, see
+`docs/development_log.md`.
+
 ## Goal
 
 Use **SSH/SFTP** instead of Samba for cross-network file exchange between:
@@ -73,6 +76,14 @@ Recommended local example for this repo:
 4. Worker writes status:
    - `.../queue/done/*.result.json` or `.../queue/failed/*.result.json`
 
+Remote lifecycle for one-shot worker pipeline:
+
+1. Worker claims one remote pending job by moving it to `running/`.
+2. Worker downloads that claimed JSON to local `queue/running/`.
+3. Worker runs simulation locally and writes local done/failed result.
+4. Worker uploads only that job bundle back to remote queue root.
+5. Server reads the uploaded result and archives the remote `running/<job>.json`.
+
 ---
 
 ## Upload Script (Worker -> Server)
@@ -81,7 +92,7 @@ Use the worker-side upload script to send one completed job bundle to the server
 
 For normal testing, prefer `scripts/worker/run_queue_loop_sftp.py`; it claims
 jobs, runs HFSS, uploads result bundles, and archives completed local result
-JSONs in one loop.
+JSONs in one loop. Remote running job JSONs are left for the server to archive.
 
 ### Required setup
 
@@ -119,3 +130,22 @@ Upload a specific result JSON:
 All files are uploaded by mirroring local queue relative paths under:
 
 - `/home/zhanghf/projects/vector/queue`
+
+---
+
+## Remote Pipeline Command
+
+Continuously fetch remote pending jobs, run them, and upload result bundles. The server archives each remote running claim after reading its result:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
+  --worker-config configs\worker.spiral_local.yaml `
+  --server-host 10.15.89.240 `
+  --server-port 22031 `
+  --username zhanghf `
+  --ssh-key C:\Users\Huifan\.ssh\id_ed25519_vector `
+  --known-hosts C:\Users\Huifan\.ssh\known_hosts `
+  --remote-queue-root /home/zhanghf/projects/vector/queue
+```
+
+Add `--once` for a one-job smoke test.

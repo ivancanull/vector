@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from common.io_utils import write_json
-from worker.sftp_uploader import upload_job_bundle_via_sftp
+from worker.queue_loop import SftpResultUploader, SftpSettings, find_result_json_for_job
 
 
 class _FakeSFTP:
@@ -87,6 +87,29 @@ def _write_done_bundle(queue_root: Path, job_id: str) -> Path:
     return result_json
 
 
+def _uploader(
+    *,
+    queue_root: Path,
+    server_host: str,
+    server_port: int,
+    username: str,
+    private_key_path: Path,
+    known_hosts_path: Path,
+    remote_queue_root: str,
+) -> SftpResultUploader:
+    return SftpResultUploader(
+        queue_root=queue_root,
+        settings=SftpSettings(
+            server_host=server_host,
+            server_port=server_port,
+            username=username,
+            remote_queue_root=remote_queue_root,
+            ssh_key=private_key_path,
+            known_hosts=known_hosts_path,
+        ),
+    )
+
+
 def test_upload_done_bundle_and_path_mirroring(monkeypatch, tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
     result_json = _write_done_bundle(queue_root, "job_001")
@@ -98,7 +121,7 @@ def test_upload_done_bundle_and_path_mirroring(monkeypatch, tmp_path: Path) -> N
     fake_client = _FakeSSHClient()
     _install_fake_paramiko(monkeypatch, fake_client)
 
-    summary = upload_job_bundle_via_sftp(
+    summary = _uploader(
         queue_root=queue_root,
         server_host="10.15.89.240",
         server_port=22031,
@@ -106,8 +129,7 @@ def test_upload_done_bundle_and_path_mirroring(monkeypatch, tmp_path: Path) -> N
         private_key_path=ssh_key,
         known_hosts_path=known_hosts,
         remote_queue_root="/home/zhanghf/projects/vector/queue",
-        result_json_path=result_json,
-    )
+    ).upload(result_json)
 
     assert summary.status == "uploaded"
     assert any(path.endswith("/done/job_001.result.json") for path in summary.uploaded_remote_paths)
@@ -139,7 +161,7 @@ def test_upload_failed_bundle_log_only(monkeypatch, tmp_path: Path) -> None:
     fake_client = _FakeSSHClient()
     _install_fake_paramiko(monkeypatch, fake_client)
 
-    summary = upload_job_bundle_via_sftp(
+    summary = _uploader(
         queue_root=queue_root,
         server_host="10.15.89.240",
         server_port=22031,
@@ -147,8 +169,7 @@ def test_upload_failed_bundle_log_only(monkeypatch, tmp_path: Path) -> None:
         private_key_path=ssh_key,
         known_hosts_path=known_hosts,
         remote_queue_root="/home/zhanghf/projects/vector/queue",
-        result_json_path=result_json,
-    )
+    ).upload(result_json)
     assert any(path.endswith("/failed/job_002.result.json") for path in summary.uploaded_remote_paths)
     assert any(path.endswith("/results/job_002.log") for path in summary.uploaded_remote_paths)
     assert all(not path.endswith(".s2p") for path in summary.uploaded_remote_paths)
@@ -179,7 +200,7 @@ def test_missing_artifact_fails_fast(monkeypatch, tmp_path: Path) -> None:
     _install_fake_paramiko(monkeypatch, fake_client)
 
     with pytest.raises(FileNotFoundError):
-        upload_job_bundle_via_sftp(
+        _uploader(
             queue_root=queue_root,
             server_host="10.15.89.240",
             server_port=22031,
@@ -187,8 +208,7 @@ def test_missing_artifact_fails_fast(monkeypatch, tmp_path: Path) -> None:
             private_key_path=ssh_key,
             known_hosts_path=known_hosts,
             remote_queue_root="/home/zhanghf/projects/vector/queue",
-            result_json_path=result_json,
-        )
+        ).upload(result_json)
 
 
 def test_strict_host_key_unknown_host_raises(monkeypatch, tmp_path: Path) -> None:
@@ -203,7 +223,7 @@ def test_strict_host_key_unknown_host_raises(monkeypatch, tmp_path: Path) -> Non
     _install_fake_paramiko(monkeypatch, fake_client)
 
     with pytest.raises(RuntimeError):
-        upload_job_bundle_via_sftp(
+        _uploader(
             queue_root=queue_root,
             server_host="unknown-host",
             server_port=22031,
@@ -211,5 +231,16 @@ def test_strict_host_key_unknown_host_raises(monkeypatch, tmp_path: Path) -> Non
             private_key_path=ssh_key,
             known_hosts_path=known_hosts,
             remote_queue_root="/home/zhanghf/projects/vector/queue",
-            result_json_path=result_json,
-        )
+        ).upload(result_json)
+
+
+def test_find_result_json_for_job_prefers_existing_state(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+    done_dir = queue_root / "done"
+    failed_dir = queue_root / "failed"
+    done_dir.mkdir(parents=True, exist_ok=True)
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    done_path = done_dir / "job_005.result.json"
+    done_path.write_text("{}", encoding="utf-8")
+    selected = find_result_json_for_job(queue_root, "job_005")
+    assert selected == done_path

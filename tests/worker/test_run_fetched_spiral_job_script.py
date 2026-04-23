@@ -126,3 +126,45 @@ def test_local_queue_submit_then_run_fetched_job(monkeypatch, tmp_path: Path) ->
     rc = run_fetched_spiral_job.run_fetched_job(running_path, tmp_path / "worker.yaml", True)
     assert rc == 0
     assert (queue_root / "done" / "spiral_demo_c01.result.json").exists()
+
+
+def test_run_fetched_job_removes_stale_result_before_first_attempt(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    queue_root = tmp_path / "queue"
+    job_file = queue_root / "running" / "demo_stale_c01.json"
+    stale_failed = queue_root / "failed" / "demo_stale_c01.result.json"
+    write_json(
+        job_file,
+        {
+            "job_id": "demo_stale_c01",
+            "template_name": "si_template_v1",
+            "variables": {"Din": "55um", "H": "2um", "S": "1.5um", "W": "15um"},
+            "output_filename": "demo_stale.s2p",
+            "submit_time": "2026-04-22T00:00:00Z",
+            "metrics_to_extract": ["max_s11_db"],
+        },
+    )
+    write_json(stale_failed, {"job_id": "demo_stale_c01", "status": "failed"})
+
+    def _fake_run_once(path: Path, _worker_cfg_path: Path):
+        assert path == job_file
+        assert not stale_failed.exists()
+        write_json(
+            queue_root / "done" / "demo_stale_c01.result.json",
+            {
+                "job_id": "demo_stale_c01",
+                "status": "done",
+                "artifacts": {
+                    "touchstone": "results/demo_stale.s2p",
+                    "log": "results/demo_stale_c01.log",
+                },
+            },
+        )
+        return SimpleNamespace(queue_root=queue_root)
+
+    monkeypatch.setattr(run_fetched_spiral_job, "_run_once", _fake_run_once)
+    rc = run_fetched_spiral_job.run_fetched_job(job_file, tmp_path / "worker.yaml", True)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "removed_stale_result=" in out
