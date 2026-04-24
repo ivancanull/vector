@@ -16,6 +16,7 @@ The HFSS worker runs on Windows and executes simulations requested by the Linux 
 - One job in, one HFSS run out: keep control flow linear and explicit.
 - Validate and parse input once, then execute once, then persist result once.
 - Keep worker wrappers thin around PyAEDT (`open -> set vars -> solve -> export -> close`).
+- When calling PyAEDT functions, check the official PyAEDT API docs instead of relying on memory.
 - Fail fast on invalid input or solve/export errors; always write one failure result.
 - Keep logs actionable: include job id, setup/sweep target, and failure class.
 - Prefer one shared helper for repeated side effects (for example failure result persistence).
@@ -41,8 +42,8 @@ scripts/worker/
   cleanup_test_results.py           # safe cleanup for disposable test_* outputs
 
 src/worker/
-  worker_main.py                    # per-job orchestration: load, resolve, execute, metrics, persist
-  hfss_api.py                       # PyAEDT/HFSS session wrapper: open, set variables, solve, export
+  worker_main.py                    # ClaimedJobProcessor: load, resolve, execute, metrics, persist
+  hfss_api.py                       # HfssJobExecutor/session classes: open, set variables, solve, export
   artifact_exporter.py              # local artifact paths, CSV export, artifact verification
   metrics.py                        # touchstone metric extraction
 
@@ -63,8 +64,8 @@ src/worker/
 
 - `fetch_run_submit_spiral_job.py` and `run_queue_loop_sftp.py` are the remote SFTP worker entrypoints.
 - `run_fetched_spiral_job.py` is the local single-job debug path.
-- `worker_main.process_claimed_job()` is the canonical per-job execution path.
-- `hfss_api.execute_job()` is the only place that should drive PyAEDT/HFSS execution.
+- `worker_main.ClaimedJobProcessor.process()` is the canonical per-job execution path.
+- `hfss_api.HfssJobExecutor.execute()` is the only place that should drive PyAEDT/HFSS execution.
 - `queue_loop.SftpResultUploader` owns uploading result bundles over SFTP.
 
 ### Queue Loop Components

@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from common.units import has_explicit_unit
 
@@ -85,10 +85,77 @@ class JobRequest(BaseModel):
 
 
 class TemplateConfig(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     project_path: Path
     design_name: str
     setup_name: str
     sweep_name: str
+    hfss_setup: "HfssSetupConfig"
+    hfss_sweep: "HfssSweepConfig"
+
+
+class HfssSetupConfig(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    solution_frequency: str = Field(min_length=1)
+    max_delta_s: float | None = Field(default=None, gt=0)
+    maximum_passes: int | None = Field(default=None, gt=0)
+    minimum_passes: int | None = Field(default=None, gt=0)
+    minimum_converged_passes: int | None = Field(default=None, gt=0)
+    percent_refinement: float | None = Field(default=None, gt=0)
+    basis_order: int | None = None
+
+    @field_validator("solution_frequency")
+    @classmethod
+    def validate_solution_frequency(cls, value: str) -> str:
+        if not has_explicit_unit(value):
+            raise ValueError("solution_frequency must include explicit units")
+        return value
+
+
+class HfssSweepConfig(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    sweep_type: Literal["interpolating", "discrete", "fast"]
+    sweep_data: str | None = Field(default=None, min_length=1)
+    start_freq: str | None = Field(default=None, min_length=1)
+    stop_freq: str | None = Field(default=None, min_length=1)
+    point_count: int | None = Field(default=None, gt=1)
+
+    @field_validator("start_freq", "stop_freq")
+    @classmethod
+    def validate_freq_units(cls, value: str | None) -> str | None:
+        if value is not None and not has_explicit_unit(value):
+            raise ValueError("Frequency values must include explicit units")
+        return value
+
+    @field_validator("sweep_data")
+    @classmethod
+    def validate_sweep_data(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("sweep_data must be non-empty when provided")
+        return value
+
+    @model_validator(mode="after")
+    def validate_definition(self) -> "HfssSweepConfig":
+        has_sweep_data = self.sweep_data is not None
+        has_range = (
+            self.start_freq is not None
+            or self.stop_freq is not None
+            or self.point_count is not None
+        )
+        if has_sweep_data == has_range:
+            raise ValueError(
+                "Provide either sweep_data or start_freq/stop_freq/point_count"
+            )
+        if has_range and (
+            self.start_freq is None or self.stop_freq is None or self.point_count is None
+        ):
+            raise ValueError(
+                "start_freq, stop_freq, and point_count are required together"
+            )
+        return self
 
 
 class TemplatesConfig(BaseModel):

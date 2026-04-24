@@ -11,11 +11,7 @@ except ModuleNotFoundError:  # Allow direct script usage without pytest installe
     pytest = None
 
 from worker.hfss_api import (
-    apply_variables,
-    close_hfss_session,
-    export_touchstone,
-    open_hfss_session,
-    run_analysis,
+    HfssSessionFactory,
 )
 from worker.param_strings import build_spiral_inductor_export_path
 
@@ -119,45 +115,50 @@ def run_existing_aedt_test(
     if not project_path.exists():
         raise FileNotFoundError(f"Project file not found: {project_path}")
 
-    hfss = None
+    session = None
     try:
         print(f"Opening project: {project_path}")
         print(f"Design: {design_name}")
         print(f"Setup: {setup_name}")
         print(f"Sweep: {sweep_name}")
         print(f"Single-case parameters: Din={Din}um H={H}um S={S}um W={W}um")
-        hfss = open_hfss_session(
-            project_path=str(project_path),
-            design_name=design_name,
-            non_graphical=not graphical,
-            new_desktop=new_desktop,
-        )
+        template = type(
+            "Template",
+            (),
+            {"project_path": project_path, "design_name": design_name},
+        )()
+        cfg = type(
+            "Cfg",
+            (),
+            {"non_graphical": not graphical, "new_desktop": new_desktop},
+        )()
+        session = HfssSessionFactory().open(template, cfg)
         variables = build_variables(Din=Din, H=H, S=S, W=W)
         print(f"Applying variables: {variables}")
-        apply_variables(hfss, variables)
+        session.apply_variables(variables)
         try:
-            run_analysis(hfss, setup_name)
+            session.analyze(setup_name)
         except Exception as exc:
             if debug:
                 print(f"[debug] solve raised: {exc}")
                 print("[debug] python traceback:")
                 print(traceback.format_exc())
-                _best_effort_hfss_debug_dump(hfss, setup_name, sweep_name)
+                _best_effort_hfss_debug_dump(session.hfss, setup_name, sweep_name)
             raise
         try:
-            exported_path = Path(export_touchstone(hfss, setup_name, sweep_name, output_path))
+            exported_path = session.export_touchstone(setup_name, sweep_name, output_path)
         except Exception as exc:
             if debug:
                 print(f"[debug] export raised: {exc}")
                 print("[debug] python traceback:")
                 print(traceback.format_exc())
-                _best_effort_hfss_debug_dump(hfss, setup_name, sweep_name)
+                _best_effort_hfss_debug_dump(session.hfss, setup_name, sweep_name)
             raise
         print(f"Export complete: {exported_path}")
         return exported_path
     finally:
-        if hfss is not None:
-            close_hfss_session(hfss, close_desktop=close_desktop)
+        if session is not None:
+            session.close(close_desktop=close_desktop)
 
 
 def test_existing_aedt_smoke() -> None:

@@ -16,7 +16,7 @@ from common.paths import ensure_runtime_dirs  # noqa: E402
 from worker.config import load_templates_config, load_worker_config  # noqa: E402
 from worker.logger import setup_global_logger  # noqa: E402
 from worker.template_registry import TemplateRegistry  # noqa: E402
-from worker.worker_main import process_claimed_job  # noqa: E402
+from worker.worker_main import ClaimedJobProcessor  # noqa: E402
 
 
 LOCAL_FALLBACK_WORKER_CONFIG = REPO_ROOT / "configs" / "worker.spiral_local.yaml"
@@ -89,7 +89,12 @@ def _run_once(job_file: Path, worker_config_path: Path):
     ensure_runtime_dirs(cfg.queue_root, cfg.logs_dir)
     template_registry = TemplateRegistry(templates_cfg)
     global_logger = setup_global_logger(cfg.logs_dir)
-    process_claimed_job(job_file, cfg, template_registry, global_logger)
+    processor = ClaimedJobProcessor.default(
+        cfg=cfg,
+        template_registry=template_registry,
+        global_logger=global_logger,
+    )
+    processor.process(job_file)
     return cfg
 
 

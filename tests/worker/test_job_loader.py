@@ -19,6 +19,19 @@ def _registry(tmp_path: Path) -> TemplateRegistry:
                 design_name="BCLF_Design",
                 setup_name="Setup1",
                 sweep_name="Sweep1",
+                hfss_setup={
+                    "solution_frequency": "2.4GHz",
+                    "max_delta_s": 0.02,
+                    "maximum_passes": 20,
+                    "minimum_passes": 1,
+                    "minimum_converged_passes": 1,
+                    "percent_refinement": 30,
+                    "basis_order": 1,
+                },
+                hfss_sweep={
+                    "sweep_type": "interpolating",
+                    "sweep_data": "LINC 0GHz 4GHz 201",
+                },
             )
         }
     )

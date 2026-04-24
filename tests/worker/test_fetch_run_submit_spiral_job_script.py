@@ -44,6 +44,18 @@ def _install_fake_uploader(monkeypatch, uploaded_remote_paths: list[str]) -> lis
     return uploaded_result_paths
 
 
+def _install_fake_processor(monkeypatch, process_func) -> None:
+    class _FakeProcessor:
+        @classmethod
+        def default(cls, *, cfg, template_registry, global_logger):
+            return cls()
+
+        def process(self, path: Path) -> None:
+            process_func(path)
+
+    monkeypatch.setattr(fetch_run_submit_spiral_job, "ClaimedJobProcessor", _FakeProcessor)
+
+
 def test_no_pending_remote_job_returns_zero(monkeypatch, tmp_path: Path, capsys) -> None:
     cfg = SimpleNamespace(
         queue_root=tmp_path / "queue",
@@ -92,7 +104,7 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
     sleeps: list[int] = []
     monkeypatch.setattr(fetch_run_submit_spiral_job.time, "sleep", lambda sec: sleeps.append(sec))
 
-    def _process(path, _cfg, _registry, _logger):
+    def _process(path):
         assert path == running_path
         (queue_root / "done").mkdir(parents=True, exist_ok=True)
         write_json(
@@ -100,7 +112,7 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
             {"job_id": "job_wait_001", "status": "done", "artifacts": {"log": "results/job_wait_001.log"}},
         )
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "process_claimed_job", _process)
+    _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["one"])
     rc = fetch_run_submit_spiral_job.run(
         worker_config=tmp_path / "worker.yaml",
@@ -141,7 +153,7 @@ def test_run_loop_processes_multiple_jobs_without_exiting(
     ]
     _install_fake_remote_queue(monkeypatch, claims)
 
-    def _process(path, _cfg, _registry, _logger):
+    def _process(path):
         job_id = path.stem
         (queue_root / "done").mkdir(parents=True, exist_ok=True)
         write_json(
@@ -149,7 +161,7 @@ def test_run_loop_processes_multiple_jobs_without_exiting(
             {"job_id": job_id, "status": "done", "artifacts": {"log": f"results/{job_id}.log"}},
         )
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "process_claimed_job", _process)
+    _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["one"])
 
     rc = fetch_run_submit_spiral_job.run(
@@ -185,7 +197,7 @@ def test_happy_path_claim_run_upload_leaves_remote_archive_to_server(
     )
     _install_fake_remote_queue(monkeypatch, [_claim("job_001", running_path)])
 
-    def _process(path, _cfg, _registry, _logger):
+    def _process(path):
         assert path == running_path
         (queue_root / "done").mkdir(parents=True, exist_ok=True)
         write_json(
@@ -193,7 +205,7 @@ def test_happy_path_claim_run_upload_leaves_remote_archive_to_server(
             {"job_id": "job_001", "status": "done", "artifacts": {"log": "results/job_001.log"}},
         )
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "process_claimed_job", _process)
+    _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["a", "b"])
     rc = fetch_run_submit_spiral_job.run(
         worker_config=tmp_path / "worker.yaml",
@@ -227,7 +239,7 @@ def test_failed_result_upload_path(monkeypatch, tmp_path: Path, capsys) -> None:
     )
     _install_fake_remote_queue(monkeypatch, [_claim("job_002", running_path)])
 
-    def _process(path, _cfg, _registry, _logger):
+    def _process(path):
         assert path == running_path
         (queue_root / "failed").mkdir(parents=True, exist_ok=True)
         write_json(
@@ -235,7 +247,7 @@ def test_failed_result_upload_path(monkeypatch, tmp_path: Path, capsys) -> None:
             {"job_id": "job_002", "status": "failed", "artifacts": {"log": "results/job_002.log"}},
         )
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "process_claimed_job", _process)
+    _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["a"])
     rc = fetch_run_submit_spiral_job.run(
         worker_config=tmp_path / "worker.yaml",
@@ -270,7 +282,7 @@ def test_removes_stale_failed_result_before_processing(monkeypatch, tmp_path: Pa
     )
     _install_fake_remote_queue(monkeypatch, [_claim("job_003", running_path)])
 
-    def _process(path, _cfg, _registry, _logger):
+    def _process(path):
         assert path == running_path
         assert not failed_path.exists()
         (queue_root / "failed").mkdir(parents=True, exist_ok=True)
@@ -279,7 +291,7 @@ def test_removes_stale_failed_result_before_processing(monkeypatch, tmp_path: Pa
             {"job_id": "job_003", "status": "failed", "artifacts": {"log": "results/job_003.log"}},
         )
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "process_claimed_job", _process)
+    _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["x"])
     rc = fetch_run_submit_spiral_job.run(
         worker_config=tmp_path / "worker.yaml",

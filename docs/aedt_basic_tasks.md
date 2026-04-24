@@ -2,6 +2,11 @@
 
 This is a compact task checklist based on the official PyAEDT user guide and API docs, aligned with this repo's `worker` flow.
 
+## API Rule
+
+When you call PyAEDT functions in this repo, check the official PyAEDT API docs first.
+Do not assume method names, argument names, or return signatures from memory because they vary across releases.
+
 ## 1) Open AEDT and attach to a project/design
 
 Use `Hfss(...)` with project/design names and session options.
@@ -19,7 +24,7 @@ hfss = Hfss(
 ```
 
 Repo mapping:
-- `open_hfss_session(...)` in `src/worker/hfss_api.py`
+- `HfssSessionFactory.open(...)` in `src/worker/hfss_api.py`
 
 ## 2) Set design variables
 
@@ -33,7 +38,7 @@ hfss["W"] = "15um"
 ```
 
 Repo mapping:
-- `apply_variables(...)` in `src/worker/hfss_api.py`
+- `HfssSession.apply_variables(...)` in `src/worker/hfss_api.py`
 - single-case variable defaults in `tests/worker/test_existing_aedt.py`
 
 ## 3) Solve one setup
@@ -45,7 +50,7 @@ ok = hfss.analyze_setup("Setup1")
 ```
 
 Repo mapping:
-- `run_analysis(...)` in `src/worker/hfss_api.py`
+- `HfssSession.analyze(...)` in `src/worker/hfss_api.py`
 
 ## 4) Export Touchstone
 
@@ -60,7 +65,7 @@ touchstone_path = hfss.export_touchstone(
 ```
 
 Repo mapping:
-- `export_touchstone(...)` in `src/worker/hfss_api.py`
+- `HfssSession.export_touchstone(...)` in `src/worker/hfss_api.py`
 - single-case output path generation in `src/worker/param_strings.py`
 
 ## 5) Close/release AEDT session
@@ -70,7 +75,7 @@ hfss.release_desktop(close_projects=False, close_desktop=False)
 ```
 
 Repo mapping:
-- `close_hfss_session(...)` in `src/worker/hfss_api.py`
+- `HfssSession.close(...)` in `src/worker/hfss_api.py`
 
 ## 6) Debug run guidance for this repo
 

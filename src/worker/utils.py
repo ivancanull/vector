@@ -10,6 +10,7 @@ FAILURE_CLASSES = {
     "unknown_template",
     "missing_template_file",
     "invalid_variable",
+    "setup_definition_failure",
     "hfss_start_failure",
     "geometry_failure",
     "mesh_failure",

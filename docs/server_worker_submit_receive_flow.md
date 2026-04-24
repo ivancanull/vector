@@ -31,8 +31,8 @@ This document summarizes how jobs are submitted by the server, received by worke
                                                   local queue/running/
                                                      <job_id>.json
                                                            |
-                                                           | process_claimed_job()
-                                                           | execute_job() + metrics
+                                                           | ClaimedJobProcessor.process()
+                                                           | HfssJobExecutor.execute() + metrics
                                                            v
                                  +--------------------------------------------------+
                                  | local result persistence                         |
@@ -78,16 +78,16 @@ Job payload fields written for workers include:
 There are two active worker entry styles, both using shared queue logic:
 
 - `scripts/worker/fetch_run_submit_spiral_job.py`
-- This path pulls remote jobs via SFTP from `pending/`, claims by rename to `running/`, downloads locally into `queue/running/`, runs in-process via `process_claimed_job(...)`, then uploads result bundles.
+- This path pulls remote jobs via SFTP from `pending/`, claims by rename to `running/`, downloads locally into `queue/running/`, runs in-process via `ClaimedJobProcessor.process(...)`, then uploads result bundles.
 - `scripts/worker/run_queue_loop_sftp.py`
 - This path uses `WorkerLoopService` from `src/worker/queue_loop.py`, claims via `SftpRemoteQueueClient.claim_one()`, runs via `SubprocessJobRunner` (`run_fetched_spiral_job.py`), and applies loop archive policies.
 - Core claim implementation: `src/worker/queue_loop.py` -> `SftpRemoteQueueClient.claim_one()`.
 
 ## 3) Worker Executes and Persists Result
 
-- Worker execution orchestration: `src/worker/worker_main.py` -> `process_claimed_job(...)`.
+- Worker execution orchestration: `src/worker/worker_main.py` -> `ClaimedJobProcessor.process(...)`.
 - Job loading/validation: `load_job(...)`.
-- HFSS solve/export: `execute_job(...)`.
+- HFSS solve/export: `HfssJobExecutor.execute(...)`.
 - Metric extraction: `compute_metrics(...)`.
 - Result persistence:
 - Success -> `queue/done/<job_id>.result.json`.
@@ -121,4 +121,3 @@ There are two active worker entry styles, both using shared queue logic:
 
 - Server submit/write: `src/server/queue_manager.py`, `scripts/server/submit_spiral_batch.py`, `scripts/server/submit_random_spiral_watch.py`.
 - Worker claim/run/upload: `src/worker/queue_loop.py`, `scripts/worker/fetch_run_submit_spiral_job.py`, `scripts/worker/run_queue_loop_sftp.py`, `scripts/worker/run_fetched_spiral_job.py`, `src/worker/worker_main.py`, `src/worker/state_manager.py`.
-

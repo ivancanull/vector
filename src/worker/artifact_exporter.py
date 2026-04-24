@@ -3,9 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
-import skrf as rf
-
 from worker.schemas import ArtifactPaths, WorkerConfig
 from worker.utils import WorkerError, as_posix_rel
 
@@ -40,6 +37,9 @@ def build_artifact_paths_with_name(
 
 def export_csv_from_touchstone(touchstone_path: Path, csv_path: Path) -> Path:
     try:
+        import numpy as np
+        import skrf as rf
+
         network = rf.Network(str(touchstone_path))
     except Exception as exc:
         raise WorkerError("export_failure", f"Failed to parse touchstone for CSV: {exc}") from exc

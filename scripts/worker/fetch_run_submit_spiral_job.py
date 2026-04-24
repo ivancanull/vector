@@ -22,7 +22,7 @@ from worker.queue_loop import (  # noqa: E402
     find_result_json_for_job,
 )
 from worker.template_registry import TemplateRegistry  # noqa: E402
-from worker.worker_main import process_claimed_job  # noqa: E402
+from worker.worker_main import ClaimedJobProcessor  # noqa: E402
 from worker.logger import setup_global_logger  # noqa: E402
 
 # Default configuration values for the worker
@@ -132,6 +132,11 @@ def run(
 ) -> int:
     # Main function to run the worker, fetching jobs and processing them
     cfg, template_registry, global_logger = _load_runtime(worker_config, queue_root)
+    processor = ClaimedJobProcessor.default(
+        cfg=cfg,
+        template_registry=template_registry,
+        global_logger=global_logger,
+    )
     sftp_settings = _build_sftp_settings(
         server_host=server_host,
         server_port=server_port,
@@ -170,7 +175,7 @@ def run(
 
         print(f"claimed={claim.remote_running_path}")
         _remove_stale_local_results(cfg.queue_root, claim.job_id)  # Clean up old results
-        process_claimed_job(claim.local_job_path, cfg, template_registry, global_logger)  # Process the job
+        processor.process(claim.local_job_path)  # Process the job
         result_json = find_result_json_for_job(cfg.queue_root, claim.job_id)  # Locate the result JSON
         result_state = result_json.parent.name
         upload_summary = uploader.upload(result_json)  # Upload the results

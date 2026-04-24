@@ -4,10 +4,8 @@ import os
 import pytest
 
 from worker.hfss_api import (
-    apply_variables,
-    export_touchstone,
-    open_hfss_session,
-    run_analysis,
+    HfssSession,
+    HfssSessionFactory,
 )
 from worker.utils import WorkerError
 
@@ -17,8 +15,7 @@ def test_basic_task_set_variables() -> None:
         pass
 
     hfss = FakeHfss()
-    apply_variables(
-        hfss,
+    HfssSession(hfss).apply_variables(
         {
             "Din": "55um",
             "H": "2um",
@@ -33,21 +30,29 @@ def test_basic_task_set_variables() -> None:
 
 
 def test_basic_task_analyze_setup_success() -> None:
-    class FakeHfss:
-        def analyze_setup(self, name: str):
-            assert name == "Setup1"
+    class FakeSetup:
+        def analyze(self):
             return True
 
-    run_analysis(FakeHfss(), "Setup1")
+    class FakeHfss:
+        def get_setup(self, name: str):
+            assert name == "Setup1"
+            return FakeSetup()
+
+    HfssSession(FakeHfss()).analyze("Setup1")
 
 
 def test_basic_task_analyze_setup_failure_raises_worker_error() -> None:
-    class FakeHfss:
-        def analyze_setup(self, _name: str):
+    class FakeSetup:
+        def analyze(self):
             return False
 
+    class FakeHfss:
+        def get_setup(self, _name: str):
+            return FakeSetup()
+
     with pytest.raises(WorkerError) as exc:
-        run_analysis(FakeHfss(), "Setup1")
+        HfssSession(FakeHfss()).analyze("Setup1")
     assert exc.value.failure_class == "mesh_failure"
 
 
@@ -61,24 +66,8 @@ def test_basic_task_export_touchstone_uses_user_guide_signature(tmp_path: Path) 
             assert kwargs["output_file"] == str(out_path)
             return str(out_path)
 
-    exported = export_touchstone(FakeHfss(), "Setup1", "Sweep", out_path)
-    assert exported == str(out_path)
-
-
-def test_basic_task_export_touchstone_falls_back_to_legacy_signature(tmp_path: Path) -> None:
-    out_path = tmp_path / "result.s2p"
-
-    class FakeHfss:
-        def export_touchstone(self, **kwargs):
-            if "setup" in kwargs:
-                raise TypeError("unsupported signature")
-            assert kwargs["setup_name"] == "Setup1"
-            assert kwargs["sweep_name"] == "Sweep"
-            assert kwargs["file_name"] == str(out_path)
-            return str(out_path)
-
-    exported = export_touchstone(FakeHfss(), "Setup1", "Sweep", out_path)
-    assert exported == str(out_path)
+    exported = HfssSession(FakeHfss()).export_touchstone("Setup1", "Sweep", out_path)
+    assert exported == out_path
 
 
 def test_basic_task_open_hfss_session_supports_new_desktop_signature(monkeypatch) -> None:
@@ -88,13 +77,15 @@ def test_basic_task_open_hfss_session_supports_new_desktop_signature(monkeypatch
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("worker.hfss_api._import_hfss_class", lambda: FakeHfss)
-    open_hfss_session(
-        project_path=r"D:\ansys\spiral_inductor_example.aedt",
-        design_name="HFSSDesign1",
-        non_graphical=True,
-        new_desktop=False,
-    )
+    factory = HfssSessionFactory()
+    monkeypatch.setattr(factory, "import_hfss_class", lambda: FakeHfss)
+    template = type(
+        "Template",
+        (),
+        {"project_path": r"D:\ansys\spiral_inductor_example.aedt", "design_name": "HFSSDesign1"},
+    )()
+    cfg = type("Cfg", (), {"non_graphical": True, "new_desktop": False})()
+    factory.open(template, cfg)
     assert captured["project"] == r"D:\ansys\spiral_inductor_example.aedt"
     assert captured["design"] == "HFSSDesign1"
     assert captured["non_graphical"] is True
@@ -110,13 +101,15 @@ def test_basic_task_open_hfss_session_retries_project_lock(monkeypatch) -> None:
             if len(calls) == 1:
                 raise RuntimeError("Project is locked. Close or remove the lock before proceeding.")
 
-    monkeypatch.setattr("worker.hfss_api._import_hfss_class", lambda: FakeHfss)
-    open_hfss_session(
-        project_path=r"D:\ansys\spiral_inductor_example.aedt",
-        design_name="HFSSDesign1",
-        non_graphical=True,
-        new_desktop=False,
-    )
+    factory = HfssSessionFactory()
+    monkeypatch.setattr(factory, "import_hfss_class", lambda: FakeHfss)
+    template = type(
+        "Template",
+        (),
+        {"project_path": r"D:\ansys\spiral_inductor_example.aedt", "design_name": "HFSSDesign1"},
+    )()
+    cfg = type("Cfg", (), {"non_graphical": True, "new_desktop": False})()
+    factory.open(template, cfg)
     assert len(calls) == 2
     assert "remove_lock" not in calls[0]
     assert calls[1]["remove_lock"] is True
