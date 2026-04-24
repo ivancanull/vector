@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import random
 import sys
 import time
 from pathlib import Path
@@ -29,23 +28,12 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from common.io_utils import read_json  # noqa: E402
-from common.job_types import BatchCase, BatchSimulationJob  # noqa: E402
 from common.paths import ensure_runtime_dirs  # noqa: E402
+from server.experiment_adapter import to_batch_simulation_job  # noqa: E402
+from server.experiment_models import Experiment, SpiralInductorExperiment, SpiralVariableRanges  # noqa: E402
 from server.queue_manager import QueueManager  # noqa: E402
 
-
-DEFAULT_METRICS = ["max_s11_db", "min_s21_db"]
-
-
-@dataclass(frozen=True)
-class RandomSpiralRanges:
-    din_min_um: float = 50.0
-    din_max_um: float = 70.0
-    s_min_um: float = 1.0
-    s_max_um: float = 2.0
-    w_min_um: float = 12.0
-    w_max_um: float = 18.0
-    h_um: float = 2.0
+RandomSpiralRanges = SpiralVariableRanges
 
 
 @dataclass(frozen=True)
@@ -63,25 +51,27 @@ def _now_batch_id() -> str:
     return "spiral_random_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
 
 
-def _format_um(value: float) -> str:
-    return f"{value:.2f}um"
-
-
-def _filename_number(value: float) -> str:
-    return f"{value:.2f}".replace(".", "d")
-
-
-def _validate_ranges(ranges: RandomSpiralRanges, count: int) -> None:
-    if count <= 0:
-        raise ValueError("count must be positive")
-    if ranges.din_min_um > ranges.din_max_um:
-        raise ValueError("din-min-um must be <= din-max-um")
-    if ranges.s_min_um > ranges.s_max_um:
-        raise ValueError("s-min-um must be <= s-max-um")
-    if ranges.w_min_um > ranges.w_max_um:
-        raise ValueError("w-min-um must be <= w-max-um")
-    if ranges.h_um <= 0:
-        raise ValueError("h-um must be positive")
+def generate_random_spiral_experiment(
+    *,
+    batch_id: str,
+    count: int,
+    seed: int | None,
+    ranges: RandomSpiralRanges,
+    template_name: str,
+    design_name: str,
+    setup_name: str,
+    sweep_name: str,
+) -> Experiment:
+    return SpiralInductorExperiment.from_random(
+        experiment_id=batch_id,
+        count=count,
+        seed=seed,
+        ranges=ranges,
+        template_name=template_name,
+        design_name=design_name,
+        setup_name=setup_name,
+        sweep_name=sweep_name,
+    )
 
 
 def generate_random_spiral_batch(
@@ -94,54 +84,27 @@ def generate_random_spiral_batch(
     design_name: str,
     setup_name: str,
     sweep_name: str,
-) -> BatchSimulationJob:
-    _validate_ranges(ranges, count)
-    rng = random.Random(seed)
-    cases: list[BatchCase] = []
-
-    for index in range(1, count + 1):
-        din = rng.uniform(ranges.din_min_um, ranges.din_max_um)
-        spacing = rng.uniform(ranges.s_min_um, ranges.s_max_um)
-        width = rng.uniform(ranges.w_min_um, ranges.w_max_um)
-        case_id = f"c{index:02d}"
-        output_filename = (
-            f"{batch_id}_{case_id}_"
-            f"Din{_filename_number(din)}_"
-            f"S{_filename_number(spacing)}_"
-            f"W{_filename_number(width)}.s2p"
-        )
-        cases.append(
-            BatchCase(
-                case_id=case_id,
-                variables={
-                    "Din": _format_um(din),
-                    "H": _format_um(ranges.h_um),
-                    "S": _format_um(spacing),
-                    "W": _format_um(width),
-                },
-                output_filename=output_filename,
-            )
-        )
-
-    return BatchSimulationJob(
+):
+    experiment = generate_random_spiral_experiment(
         batch_id=batch_id,
+        count=count,
+        seed=seed,
+        ranges=ranges,
         template_name=template_name,
-        cases=cases,
-        metrics_to_extract=list(DEFAULT_METRICS),
         design_name=design_name,
         setup_name=setup_name,
         sweep_name=sweep_name,
-        artifact_options={"export_touchstone": True, "export_csv": True},
     )
+    return to_batch_simulation_job(experiment)
 
 
-def submit_random_batch(queue_root: Path, batch: BatchSimulationJob) -> list[Path]:
+def submit_random_batch(queue_root: Path, batch) -> list[Path]:
     ensure_runtime_dirs(queue_root, REPO_ROOT / "logs")
     manager = QueueManager(queue_root)
     return manager.enqueue_batch(batch)
 
 
-def _job_id_for(batch_id: str, case: BatchCase) -> str:
+def _job_id_for(batch_id: str, case: Any) -> str:
     return f"{batch_id}_{case.case_id}"
 
 

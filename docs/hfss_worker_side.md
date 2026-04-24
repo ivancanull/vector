@@ -57,7 +57,6 @@ src/worker/
   param_strings.py                  # spiral parameter/export name helpers
 
   queue_loop.py                     # SFTP worker service, local queue store, subprocess runner, uploader
-  sftp_uploader.py                  # compatibility exports for uploader types/helpers
 ```
 
 ### Core Runtime Path
