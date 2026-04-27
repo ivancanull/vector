@@ -32,7 +32,7 @@ This document summarizes how jobs are submitted by the server, received by worke
                                                      <job_id>.json
                                                            |
                                                            | ClaimedJobProcessor.process()
-                                                           | HfssJobExecutor.execute() + metrics
+·                                                           | HfssJobExecutor.execute() + metrics
                                                            v
                                  +--------------------------------------------------+
                                  | local result persistence                         |
