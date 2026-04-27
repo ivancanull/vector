@@ -1,7 +1,6 @@
 import numpy as np
-from sympy import false
 from scipy.interpolate import interp1d
-from scipy.integrate import cumtrapz
+from scipy.integrate import cumulative_trapezoid as cumtrapz
 
 # Physics models for particle interaction
 PHYSICS_MODEL = {
@@ -38,7 +37,7 @@ def uncertainty_aware_distribute(
 
     pdf_u = u / (np.sum(u))
     pdf_mix = lambda_param * (1 / len(x)) + (1 - lambda_param) * pdf_u
-    samples = np.random.choice(x, size=sample_num, replace=false, p=pdf_mix)
+    samples = np.random.choice(x, size=sample_num, replace=False, p=pdf_mix)
     return samples.reshape(-1)  # Ensure samples are in the correct shape
 
 def partition_by_uncertainty(x, u, n_samples):

@@ -1,6 +1,33 @@
 import argparse
 import yaml
-from omegaconf import DictConfig
+
+try:
+    from omegaconf import DictConfig
+except ModuleNotFoundError:
+    class DictConfig(dict):
+        """Small attribute-access fallback used when OmegaConf is unavailable."""
+
+        def __init__(self, values):
+            super().__init__()
+            for key, value in values.items():
+                self[key] = self._wrap(value)
+
+        def __getattr__(self, key):
+            try:
+                return self[key]
+            except KeyError as exc:
+                raise AttributeError(key) from exc
+
+        def __setattr__(self, key, value):
+            self[key] = self._wrap(value)
+
+        @classmethod
+        def _wrap(cls, value):
+            if isinstance(value, dict):
+                return cls(value)
+            if isinstance(value, list):
+                return [cls._wrap(item) for item in value]
+            return value
 
 def load_config():
     parser = argparse.ArgumentParser(description="Run Bayesian Neural Network demo for geophysical parameters.")

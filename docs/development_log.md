@@ -47,6 +47,7 @@ This document tracks implementation status, operational decisions, and near-term
 
 - Updated SFTP docs to reflect server-managed remote archive behavior.
 - Updated script README for continuous fetch-run-submit behavior and cleanup commands.
+- Added `simulation_interface.md` for the optimization-level real/fake simulator API.
 - Added this development log as the living implementation/planning tracker.
 
 ## Known Issues and Watch Items
