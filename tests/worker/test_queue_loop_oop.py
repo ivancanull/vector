@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 import time
 
-from worker.queue_loop import ClaimedJob, JobResult, StaleJobPolicy, WorkerLoopService
+from worker.queue_loop import (
+    ClaimedJob,
+    JobResult,
+    StaleJobPolicy,
+    SubprocessJobRunner,
+    WorkerLoopService,
+)
 
 
 class ListReporter:
@@ -134,6 +140,26 @@ class FakeResultUploader:
         self.uploaded.append(result_json_path)
 
 
+class _MinimalLocalStore:
+    def __init__(self, result_json_path: Path) -> None:
+        self.result_json_path = result_json_path
+        self.failure_writes: list[tuple[Path, str, str]] = []
+
+    def find_result_json(self, _job_id: str) -> Path | None:
+        if self.result_json_path.exists():
+            return self.result_json_path
+        return None
+
+    def write_failure_result(self, job_path: Path, error_message: str, detail: str = "") -> Path:
+        self.failure_writes.append((job_path, error_message, detail))
+        self.result_json_path.parent.mkdir(parents=True, exist_ok=True)
+        self.result_json_path.write_text(
+            json.dumps({"job_id": "demo_job_002", "status": "failed"}),
+            encoding="utf-8",
+        )
+        return self.result_json_path
+
+
 def test_worker_loop_service_runs_one_fake_job_then_idles(tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
     local_store = FileLocalQueueStore(
@@ -158,3 +184,43 @@ def test_worker_loop_service_runs_one_fake_job_then_idles(tmp_path: Path) -> Non
     assert (queue_root / "archive" / "running" / "demo_job_001.json").exists()
     assert [path.name for path in uploader.uploaded] == ["demo_job_001.result.json"]
     assert reporter.events[-1] == "idle"
+
+
+def test_subprocess_runner_uses_generic_fetched_job_entrypoint(tmp_path: Path) -> None:
+    repo_root = tmp_path
+    running_job_path = repo_root / "queue" / "running" / "demo_job_002.json"
+    running_job_path.parent.mkdir(parents=True, exist_ok=True)
+    running_job_path.write_text(json.dumps({"job_id": "demo_job_002"}), encoding="utf-8")
+    done_result_path = repo_root / "queue" / "done" / "demo_job_002.result.json"
+    done_result_path.parent.mkdir(parents=True, exist_ok=True)
+    done_result_path.write_text(
+        json.dumps({"job_id": "demo_job_002", "status": "done"}),
+        encoding="utf-8",
+    )
+    local_store = _MinimalLocalStore(done_result_path)
+    commands: list[list[str]] = []
+
+    def _fake_run(command, **_kwargs):
+        commands.append(command)
+        return type("CP", (), {"returncode": 0})()
+
+    runner = SubprocessJobRunner(
+        repo_root=repo_root,
+        worker_config_path=repo_root / "configs" / "worker.yaml",
+        timeout_sec=30,
+        local_store=local_store,
+        run_command=_fake_run,
+    )
+    result = runner.run(
+        ClaimedJob(
+            job_id="demo_job_002",
+            job_name="demo_job_002.json",
+            local_job_path=running_job_path,
+            remote_running_path="running/demo_job_002.json",
+        )
+    )
+
+    assert result.status == "done"
+    assert commands
+    assert commands[0][1] == "-m"
+    assert commands[0][2] == "worker.run_fetched_job_cli"

@@ -35,8 +35,8 @@ See `docs/server_worker_coherent_test.md` for the paired Windows worker command 
 Continuously fetch jobs from remote `pending`, run locally, and upload each result bundle. The server owns archiving remote `running/<job>.json` files after it reads the results.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
-  --worker-config configs\worker.spiral_local.yaml `
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_job.py `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
@@ -63,21 +63,6 @@ Continuously claim remote server jobs over SFTP, run each job locally, upload th
 Default SSH files are `%USERPROFILE%\.ssh\id_ed25519` and `%USERPROFILE%\.ssh\known_hosts` on Windows. Add `--ssh-key` and `--known-hosts` only when using non-default paths.
 
 Use `--once` to process at most one stale local job, one unuploaded local result, or one newly claimed remote job.
-
-## Worker: Run One Fetched Job
-
-Run one explicit local `queue/running/*.json` job. This is the supported local debugging path after the legacy local `pending -> running` worker was removed.
-
-```powershell
-.\.venv\Scripts\python.exe scripts\server\submit_spiral_batch.py --batch scripts\server\examples\spiral_batch.localrun.json --queue-root queue
-Move-Item queue\pending\spiral_demo_local_c01.json queue\running\spiral_demo_local_c01.json -Force
-.\.venv\Scripts\python.exe scripts\worker\run_fetched_spiral_job.py --job-file queue\running\spiral_demo_local_c01.json --worker-config configs\worker.spiral_local.yaml
-```
-
-Expected outputs:
-- `queue/done/<job_id>.result.json` on success
-- `queue/failed/<job_id>.result.json` on failure
-- artifacts/logs under `queue/results/`
 
 ## Worker: Cleanup Test Results
 
