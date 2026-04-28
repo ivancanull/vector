@@ -30,7 +30,7 @@ DEFAULT_SERVER_HOST = "10.15.89.240"
 DEFAULT_SERVER_PORT = 22031
 DEFAULT_USERNAME = "zhanghf"
 DEFAULT_REMOTE_QUEUE_ROOT = "/home/zhanghf/projects/vector/queue"
-DEFAULT_WORKER_CONFIG = REPO_ROOT / "configs" / "worker.spiral_local.yaml"
+DEFAULT_WORKER_CONFIG = REPO_ROOT / "configs" / "worker.yaml"
 
 
 def parse_args() -> argparse.Namespace:

@@ -91,27 +91,7 @@ class TemplateConfig(BaseModel):
     design_name: str
     setup_name: str
     sweep_name: str
-    hfss_setup: "HfssSetupConfig"
     hfss_sweep: "HfssSweepConfig"
-
-
-class HfssSetupConfig(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    solution_frequency: str = Field(min_length=1)
-    max_delta_s: float | None = Field(default=None, gt=0)
-    maximum_passes: int | None = Field(default=None, gt=0)
-    minimum_passes: int | None = Field(default=None, gt=0)
-    minimum_converged_passes: int | None = Field(default=None, gt=0)
-    percent_refinement: float | None = Field(default=None, gt=0)
-    basis_order: int | None = None
-
-    @field_validator("solution_frequency")
-    @classmethod
-    def validate_solution_frequency(cls, value: str) -> str:
-        if not has_explicit_unit(value):
-            raise ValueError("solution_frequency must include explicit units")
-        return value
 
 
 class HfssSweepConfig(BaseModel):

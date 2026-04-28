@@ -309,7 +309,7 @@ class SpiralInductorExperiment(Experiment):
                 ExperimentObjective(metric_name="min_s21_db", direction="maximize"),
             ],
             cases=cases,
-            artifact_options={"export_touchstone": True, "export_csv": True},
+            artifact_options={"export_touchstone": True, "export_csv": False},
         )
         experiment.validate_cases_against_design_space()
         return experiment

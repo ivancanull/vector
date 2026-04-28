@@ -264,7 +264,6 @@ class HfssJobExecutor:
                 session.hfss,
                 setup_name=template_cfg.setup_name,
                 sweep_name=template_cfg.sweep_name,
-                setup_config=template_cfg.hfss_setup,
                 sweep_config=template_cfg.hfss_sweep,
             )
             session.analyze(resolved_setup.setup_name)

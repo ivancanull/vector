@@ -6,7 +6,6 @@ import pytest
 
 from worker.schemas import (
     ArtifactOptions,
-    HfssSetupConfig,
     HfssSweepConfig,
     JobRequest,
     TemplatesConfig,
@@ -114,32 +113,11 @@ def _template_payload(project_file: Path) -> dict[str, object]:
         "design_name": "HFSSDesign1",
         "setup_name": "Setup1",
         "sweep_name": "Sweep1",
-        "hfss_setup": {
-            "solution_frequency": "2.4GHz",
-            "max_delta_s": 0.02,
-            "maximum_passes": 20,
-            "minimum_passes": 1,
-            "minimum_converged_passes": 1,
-            "percent_refinement": 30,
-            "basis_order": 1,
-        },
         "hfss_sweep": {
             "sweep_type": "interpolating",
             "sweep_data": "LINC 0GHz 4GHz 201",
         },
     }
-
-
-def _hfss_setup_config() -> HfssSetupConfig:
-    return HfssSetupConfig(
-        solution_frequency="2.4GHz",
-        max_delta_s=0.02,
-        maximum_passes=20,
-        minimum_passes=1,
-        minimum_converged_passes=1,
-        percent_refinement=30,
-        basis_order=1,
-    )
 
 
 def _hfss_sweep_config() -> HfssSweepConfig:
@@ -205,7 +183,7 @@ def test_hfss_sweep_config_rejects_mixed_definition() -> None:
         )
 
 
-def test_template_registry_carries_hfss_setup_config(tmp_path: Path) -> None:
+def test_template_registry_carries_hfss_sweep_config(tmp_path: Path) -> None:
     project_file = tmp_path / "template.aedt"
     project_file.write_text("placeholder", encoding="utf-8")
     templates = TemplatesConfig(
@@ -217,7 +195,6 @@ def test_template_registry_carries_hfss_setup_config(tmp_path: Path) -> None:
 
     assert resolved.setup_name == "JobSetup"
     assert resolved.sweep_name == "JobSweep"
-    assert resolved.hfss_setup.solution_frequency == "2.4GHz"
     assert resolved.hfss_sweep.sweep_data == "LINC 0GHz 4GHz 201"
 
 
@@ -230,7 +207,6 @@ def test_setup_designer_creates_missing_setup_and_sweep() -> None:
         hfss,
         setup_name="Setup1",
         sweep_name="Sweep1",
-        setup_config=_hfss_setup_config(),
         sweep_config=_hfss_sweep_config(),
     )
 
@@ -238,8 +214,6 @@ def test_setup_designer_creates_missing_setup_and_sweep() -> None:
     sweep = setup.sweeps[0]
     assert resolved.setup_name == "Setup1"
     assert resolved.sweep_name == "Sweep1"
-    assert setup.props["Frequency"] == "2.4GHz"
-    assert setup.props["MaximumPasses"] == 20
     assert sweep.props["Type"] == "Interpolating"
     assert sweep.props["RangeType"] == "LinearCount"
     assert sweep.props["RangeStart"] == "0GHz"
@@ -261,12 +235,10 @@ def test_setup_designer_modifies_existing_setup_in_place() -> None:
         hfss,
         setup_name="Setup1",
         sweep_name="Sweep1",
-        setup_config=_hfss_setup_config(),
         sweep_config=_hfss_sweep_config(),
     )
 
     assert len(hfss.setups) == 1
-    assert setup.props["Frequency"] == "2.4GHz"
     recreated = setup.get_sweep("Sweep1")
     assert recreated is not sweep
     assert recreated.props["RangeType"] == "LinearCount"
@@ -305,7 +277,6 @@ def test_setup_designer_raises_when_setup_cannot_create_sweep() -> None:
             NoSweepHfss(),
             setup_name="Setup1",
             sweep_name="Sweep1",
-            setup_config=_hfss_setup_config(),
             sweep_config=_hfss_sweep_config(),
         )
     assert exc.value.failure_class == "setup_definition_failure"

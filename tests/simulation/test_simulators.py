@@ -16,7 +16,6 @@ from simulation import (
 )
 from worker.schemas import (
     ArtifactPaths,
-    HfssSetupConfig,
     HfssSweepConfig,
     JobResult,
     WorkerConfig,
@@ -267,7 +266,6 @@ def _template() -> ResolvedTemplate:
         design_name="HFSSDesign1",
         setup_name="Setup1",
         sweep_name="Sweep",
-        hfss_setup=HfssSetupConfig(solution_frequency="1GHz"),
         hfss_sweep=HfssSweepConfig(sweep_type="interpolating", sweep_data="LINC 1GHz 2GHz 2"),
     )
 

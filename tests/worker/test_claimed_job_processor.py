@@ -35,7 +35,6 @@ def _registry(tmp_path: Path) -> TemplateRegistry:
                     "design_name": "HFSSDesign1",
                     "setup_name": "Setup1",
                     "sweep_name": "Sweep",
-                    "hfss_setup": {"solution_frequency": "2.4GHz"},
                     "hfss_sweep": {
                         "sweep_type": "interpolating",
                         "sweep_data": "LINC 0GHz 4GHz 201",

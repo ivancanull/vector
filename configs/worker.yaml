@@ -1,10 +1,10 @@
-worker_name: hfss_win01
-queue_root: D:/shared_queue
-templates_yaml: D:/project/configs/templates.yaml
-poll_interval_sec: 5
-claim_retry_sec: 2
-results_dir: D:/shared_queue/results
-logs_dir: D:/project/logs
+worker_name: hfss_win01_local
+queue_root: D:/vector/queue
+templates_yaml: D:/vector/configs/templates.yaml
+poll_interval_sec: 2
+claim_retry_sec: 1
+results_dir: D:/vector/queue/results
+logs_dir: D:/vector/logs
 non_graphical: true
 new_desktop: false
 close_desktop_after_job: false
@@ -12,5 +12,5 @@ restart_aedt_every_n_jobs: 10
 job_timeout_sec: 7200
 max_retry_count: 2
 default_export_touchstone: true
-default_export_csv: true
+default_export_csv: false
 preserve_local_project_copy: false

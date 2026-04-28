@@ -12,5 +12,5 @@ restart_aedt_every_n_jobs: 10
 job_timeout_sec: 7200
 max_retry_count: 2
 default_export_touchstone: true
-default_export_csv: true
+default_export_csv: false
 preserve_local_project_copy: false
