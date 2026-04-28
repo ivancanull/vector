@@ -14,19 +14,38 @@ Optional queue root override:
 .\.venv\Scripts\python.exe scripts\server\submit_spiral_batch.py --batch <path-to-batch.json> --queue-root queue
 ```
 
-## Server: Submit Five Random Cases And Watch
+## Server: Submit Random Cases And Watch (Unified)
 
-Generate five random spiral cases, submit them to `queue/pending`, then watch for the worker-uploaded results.
+Submit random cases and watch worker results using one script selected by template.
+Ranges are built into the script (not CLI inputs).
+
+SI / spiral example:
 
 ```bash
 cd /home/zhanghf/projects/vector
-PYTHONPATH=src:. python scripts/server/submit_random_spiral_watch.py \
+PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
+  --template-name si_template_v1 \
   --queue-root queue \
   --count 5 \
   --seed 123 \
   --timeout-sec 7200 \
   --poll-interval-sec 10
 ```
+
+BCLF example:
+
+```bash
+cd /home/zhanghf/projects/vector
+PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
+  --template-name bclf_template_v1 \
+  --queue-root queue \
+  --count 5 \
+  --seed 123 \
+  --timeout-sec 7200 \
+  --poll-interval-sec 10
+```
+
+This script does not copy/export artifacts. Results stay in queue directories for external transfer scripts.
 
 See `docs/server_worker_coherent_test.md` for the paired Windows worker command and troubleshooting notes.
 
@@ -35,8 +54,8 @@ See `docs/server_worker_coherent_test.md` for the paired Windows worker command 
 Continuously fetch jobs from remote `pending`, run locally, and upload each result bundle. The server owns archiving remote `running/<job>.json` files after it reads the results.
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
-  --worker-config configs\worker.spiral_local.yaml `
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_job.py `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
@@ -64,21 +83,6 @@ Default SSH files are `%USERPROFILE%\.ssh\id_ed25519` and `%USERPROFILE%\.ssh\kn
 
 Use `--once` to process at most one stale local job, one unuploaded local result, or one newly claimed remote job.
 
-## Worker: Run One Fetched Job
-
-Run one explicit local `queue/running/*.json` job. This is the supported local debugging path after the legacy local `pending -> running` worker was removed.
-
-```powershell
-.\.venv\Scripts\python.exe scripts\server\submit_spiral_batch.py --batch scripts\server\examples\spiral_batch.localrun.json --queue-root queue
-Move-Item queue\pending\spiral_demo_local_c01.json queue\running\spiral_demo_local_c01.json -Force
-.\.venv\Scripts\python.exe scripts\worker\run_fetched_spiral_job.py --job-file queue\running\spiral_demo_local_c01.json --worker-config configs\worker.spiral_local.yaml
-```
-
-Expected outputs:
-- `queue/done/<job_id>.result.json` on success
-- `queue/failed/<job_id>.result.json` on failure
-- artifacts/logs under `queue/results/`
-
 ## Worker: Cleanup Test Results
 
 Delete local result JSON/artifact files only for jobs whose `job_id` starts with `test_` (keeps `exp_*`).
@@ -100,3 +104,12 @@ Preview only (no deletion):
 - Success results: `queue/done/*.result.json`
 - Failure results: `queue/failed/*.result.json`
 - Artifacts/logs: `queue/results/*`
+
+## Notebook: Online BO Campaign
+
+Use `notebooks/bo_online_campaign.ipynb` for real-simulator BO campaigns with resume support.
+
+- Each execution runs only one seed.
+- Completed seeds are tracked in `experiments/bo_online/campaign_summary.csv`.
+- Per-seed checkpoints are kept as `experiments/bo_online/bo_online_seed{seed}.checkpoint.json`.
+- Re-run the notebook later to continue remaining seeds automatically.

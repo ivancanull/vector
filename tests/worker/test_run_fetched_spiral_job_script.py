@@ -6,17 +6,17 @@ from types import SimpleNamespace
 
 from common.io_utils import read_json, write_json
 from scripts.server.submit_spiral_batch import submit_batch
-from scripts.worker import run_fetched_spiral_job
+from worker import run_fetched_job_cli
 
 
 def test_run_fetched_job_missing_or_invalid_file(tmp_path: Path) -> None:
     missing = tmp_path / "queue" / "running" / "missing.json"
-    assert run_fetched_spiral_job.run_fetched_job(missing, tmp_path / "worker.yaml", True) == 2
+    assert run_fetched_job_cli.run_fetched_job(missing, tmp_path / "worker.yaml", True) == 2
 
     invalid = tmp_path / "queue" / "running" / "invalid.json"
     invalid.parent.mkdir(parents=True, exist_ok=True)
     invalid.write_text("{ invalid json", encoding="utf-8")
-    assert run_fetched_spiral_job.run_fetched_job(invalid, tmp_path / "worker.yaml", True) == 2
+    assert run_fetched_job_cli.run_fetched_job(invalid, tmp_path / "worker.yaml", True) == 2
 
 
 def test_retry_path_runs_once_and_applies_fix(monkeypatch, tmp_path: Path) -> None:
@@ -66,9 +66,9 @@ def test_retry_path_runs_once_and_applies_fix(monkeypatch, tmp_path: Path) -> No
             )
         return SimpleNamespace(queue_root=queue_root)
 
-    monkeypatch.setattr(run_fetched_spiral_job, "_run_once", _fake_run_once)
+    monkeypatch.setattr(run_fetched_job_cli, "_run_once", _fake_run_once)
 
-    rc = run_fetched_spiral_job.run_fetched_job(job_file, tmp_path / "worker.yaml", True)
+    rc = run_fetched_job_cli.run_fetched_job(job_file, tmp_path / "worker.yaml", True)
     assert rc == 0
     assert calls["count"] == 2
 
@@ -122,8 +122,8 @@ def test_local_queue_submit_then_run_fetched_job(monkeypatch, tmp_path: Path) ->
         )
         return SimpleNamespace(queue_root=queue_root)
 
-    monkeypatch.setattr(run_fetched_spiral_job, "_run_once", _fake_run_once)
-    rc = run_fetched_spiral_job.run_fetched_job(running_path, tmp_path / "worker.yaml", True)
+    monkeypatch.setattr(run_fetched_job_cli, "_run_once", _fake_run_once)
+    rc = run_fetched_job_cli.run_fetched_job(running_path, tmp_path / "worker.yaml", True)
     assert rc == 0
     assert (queue_root / "done" / "spiral_demo_c01.result.json").exists()
 
@@ -163,8 +163,8 @@ def test_run_fetched_job_removes_stale_result_before_first_attempt(
         )
         return SimpleNamespace(queue_root=queue_root)
 
-    monkeypatch.setattr(run_fetched_spiral_job, "_run_once", _fake_run_once)
-    rc = run_fetched_spiral_job.run_fetched_job(job_file, tmp_path / "worker.yaml", True)
+    monkeypatch.setattr(run_fetched_job_cli, "_run_once", _fake_run_once)
+    rc = run_fetched_job_cli.run_fetched_job(job_file, tmp_path / "worker.yaml", True)
     out = capsys.readouterr().out
     assert rc == 0
     assert "removed_stale_result=" in out

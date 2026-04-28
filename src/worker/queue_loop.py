@@ -437,9 +437,12 @@ class SubprocessJobRunner:
         self.run_command = run_command
 
     def run(self, claimed: ClaimedJob) -> JobResult:
+        # Use the generic fetched-job runner so one worker loop can process
+        # different template/job families (spiral, BCLF, SI, MTL, ...).
         command = [
             sys.executable,
-            str(self.repo_root / "scripts" / "worker" / "run_fetched_spiral_job.py"),
+            "-m",
+            "worker.run_fetched_job_cli",
             "--job-file",
             str(claimed.local_job_path),
             "--worker-config",

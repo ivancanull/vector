@@ -1,50 +1,19 @@
 from __future__ import annotations
 
-import argparse
+"""Run one fetched job JSON with optional single retry.
+
+This module is template-agnostic and intended for internal worker use.
+"""
+
 import json
 from pathlib import Path
-import sys
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = REPO_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-
-from common.io_utils import read_json, write_json  # noqa: E402
-from common.paths import ensure_runtime_dirs  # noqa: E402
-from worker.config import load_templates_config, load_worker_config  # noqa: E402
-from worker.logger import setup_global_logger  # noqa: E402
-from worker.template_registry import TemplateRegistry  # noqa: E402
-from worker.worker_main import ClaimedJobProcessor  # noqa: E402
-
-
-LOCAL_FALLBACK_WORKER_CONFIG = REPO_ROOT / "configs" / "worker.spiral_local.yaml"
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run one already-fetched local job JSON and optionally auto-retry once."
-    )
-    parser.add_argument(
-        "--job-file",
-        type=Path,
-        required=True,
-        help="Local fetched job JSON path (typically under queue/running).",
-    )
-    parser.add_argument(
-        "--worker-config",
-        type=Path,
-        default=LOCAL_FALLBACK_WORKER_CONFIG,
-        help="Path to worker config YAML.",
-    )
-    parser.add_argument(
-        "--retry-on-failure",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Auto-apply one deterministic fix and retry once.",
-    )
-    return parser.parse_args()
+from common.io_utils import read_json, write_json
+from common.paths import ensure_runtime_dirs
+from worker.config import load_templates_config, load_worker_config
+from worker.logger import setup_global_logger
+from worker.template_registry import TemplateRegistry
+from worker.worker_main import ClaimedJobProcessor
 
 
 def _touchstone_suffix_ok(filename: str) -> bool:
@@ -109,36 +78,34 @@ def _ensure_running_job_file(job_file: Path, payload: dict, queue_root: Path) ->
 def _apply_retry_fix(
     payload: dict,
     failure_class: str,
-    worker_config_path: Path,
-) -> tuple[dict | None, Path, str | None]:
-    if failure_class == "missing_template_file":
-        return payload, LOCAL_FALLBACK_WORKER_CONFIG, "switched_worker_config_to_local_template"
-
+) -> tuple[dict | None, str | None]:
     if failure_class in {"mesh_failure", "export_failure"}:
+        # Generic fix: drop explicit overrides and let template defaults resolve.
         updated = dict(payload)
-        updated["setup_name"] = "Setup1"
-        updated["sweep_name"] = "Sweep"
-        return updated, worker_config_path, "forced_setup_sweep_to_Setup1_Sweep"
+        updated.pop("setup_name", None)
+        updated.pop("sweep_name", None)
+        updated.pop("design_name", None)
+        return updated, "cleared_design_setup_sweep_overrides"
 
     if failure_class == "invalid_job_json":
         output_name = payload.get("output_filename")
         if isinstance(output_name, str) and not _touchstone_suffix_ok(output_name):
             updated = dict(payload)
             updated["output_filename"] = f"{output_name}.s2p"
-            return updated, worker_config_path, "normalized_output_filename_suffix"
+            return updated, "normalized_output_filename_suffix"
 
-    return None, worker_config_path, None
+    return None, None
 
 
 def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: bool) -> int:
     if not job_file.exists():
-        print(f"Job file not found: {job_file}", file=sys.stderr)
+        print(f"Job file not found: {job_file}")
         return 2
 
     try:
         payload = read_json(job_file)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"Invalid job JSON: {job_file} ({exc})", file=sys.stderr)
+        print(f"Invalid job JSON: {job_file} ({exc})")
         return 2
 
     job_id = _job_id_from_payload(payload, job_file)
@@ -148,7 +115,7 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
     done_path, failed_path = _result_paths(cfg.queue_root, job_id)
     if done_path.exists():
         result = read_json(done_path)
-        print(f"status=done")
+        print("status=done")
         print(f"result_json={done_path}")
         if isinstance(result.get("artifacts"), dict):
             artifacts = result["artifacts"]
@@ -161,8 +128,8 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
         return 0
 
     if not failed_path.exists():
-        print(f"status=unknown", file=sys.stderr)
-        print(f"message=no done/failed result found for job_id={job_id}", file=sys.stderr)
+        print("status=unknown")
+        print(f"message=no done/failed result found for job_id={job_id}")
         return 3
 
     failure_payload = read_json(failed_path)
@@ -170,7 +137,7 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
     log_rel = None
     if isinstance(failure_payload.get("artifacts"), dict):
         log_rel = failure_payload["artifacts"].get("log")
-    print(f"status=failed")
+    print("status=failed")
     print(f"result_json={failed_path}")
     if log_rel:
         print(f"log={cfg.queue_root / log_rel}")
@@ -179,15 +146,13 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
     if not retry_on_failure:
         return 1
 
-    updated_payload, retry_worker_config_path, fix_name = _apply_retry_fix(
-        payload, failure_class, worker_config_path
-    )
+    updated_payload, fix_name = _apply_retry_fix(payload, failure_class)
     if updated_payload is None or fix_name is None:
         return 1
 
     retry_job_file = _ensure_running_job_file(job_file, updated_payload, cfg.queue_root)
     _remove_stale_result_files(retry_job_file, job_id)
-    retry_cfg = _run_once(retry_job_file, retry_worker_config_path)
+    retry_cfg = _run_once(retry_job_file, worker_config_path)
     retry_done_path, retry_failed_path = _result_paths(retry_cfg.queue_root, job_id)
     print(f"retry_fix={fix_name}")
     if retry_done_path.exists():
@@ -215,12 +180,3 @@ def run_fetched_job(job_file: Path, worker_config_path: Path, retry_on_failure: 
             if retry_log:
                 print(f"log={retry_cfg.queue_root / retry_log}")
     return 1
-
-
-def main() -> int:
-    args = parse_args()
-    return run_fetched_job(args.job_file, args.worker_config, args.retry_on_failure)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

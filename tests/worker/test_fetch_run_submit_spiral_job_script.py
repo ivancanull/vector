@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from common.io_utils import write_json
-from scripts.worker import fetch_run_submit_spiral_job
+from scripts.worker import fetch_run_submit_job
 from worker.queue_loop import ClaimedJob
 
 
@@ -25,7 +25,7 @@ def _install_fake_remote_queue(monkeypatch, claims: list[ClaimedJob | None]) -> 
         def claim_one(self) -> ClaimedJob | None:
             return claims.pop(0)
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "SftpRemoteQueueClient", _FakeRemoteQueueClient)
+    monkeypatch.setattr(fetch_run_submit_job, "SftpRemoteQueueClient", _FakeRemoteQueueClient)
 
 
 def _install_fake_uploader(monkeypatch, uploaded_remote_paths: list[str]) -> list[Path]:
@@ -40,7 +40,7 @@ def _install_fake_uploader(monkeypatch, uploaded_remote_paths: list[str]) -> lis
             uploaded_result_paths.append(result_json_path)
             return SimpleNamespace(uploaded_remote_paths=uploaded_remote_paths)
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "SftpResultUploader", _FakeUploader)
+    monkeypatch.setattr(fetch_run_submit_job, "SftpResultUploader", _FakeUploader)
     return uploaded_result_paths
 
 
@@ -53,7 +53,7 @@ def _install_fake_processor(monkeypatch, process_func) -> None:
         def process(self, path: Path) -> None:
             process_func(path)
 
-    monkeypatch.setattr(fetch_run_submit_spiral_job, "ClaimedJobProcessor", _FakeProcessor)
+    monkeypatch.setattr(fetch_run_submit_job, "ClaimedJobProcessor", _FakeProcessor)
 
 
 def test_no_pending_remote_job_returns_zero(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -63,13 +63,13 @@ def test_no_pending_remote_job_returns_zero(monkeypatch, tmp_path: Path, capsys)
         poll_interval_sec=1,
     )
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
     _install_fake_remote_queue(monkeypatch, [None])
 
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",
@@ -92,7 +92,7 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
     running_path.write_text('{"job_id":"job_wait_001"}', encoding="utf-8")
     cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=2)
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
@@ -102,7 +102,7 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
     ]
     _install_fake_remote_queue(monkeypatch, claims)
     sleeps: list[int] = []
-    monkeypatch.setattr(fetch_run_submit_spiral_job.time, "sleep", lambda sec: sleeps.append(sec))
+    monkeypatch.setattr(fetch_run_submit_job.time, "sleep", lambda sec: sleeps.append(sec))
 
     def _process(path):
         assert path == running_path
@@ -114,7 +114,7 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
 
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["one"])
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",
@@ -143,7 +143,7 @@ def test_run_loop_processes_multiple_jobs_without_exiting(
     second_running.write_text('{"job_id":"job_loop_002"}', encoding="utf-8")
     cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=1)
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
@@ -164,7 +164,7 @@ def test_run_loop_processes_multiple_jobs_without_exiting(
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["one"])
 
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",
@@ -191,7 +191,7 @@ def test_happy_path_claim_run_upload_leaves_remote_archive_to_server(
 
     cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=1)
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
@@ -207,7 +207,7 @@ def test_happy_path_claim_run_upload_leaves_remote_archive_to_server(
 
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["a", "b"])
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",
@@ -233,7 +233,7 @@ def test_failed_result_upload_path(monkeypatch, tmp_path: Path, capsys) -> None:
     running_path.write_text('{"job_id":"job_002"}', encoding="utf-8")
     cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=1)
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
@@ -249,7 +249,7 @@ def test_failed_result_upload_path(monkeypatch, tmp_path: Path, capsys) -> None:
 
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["a"])
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",
@@ -276,7 +276,7 @@ def test_removes_stale_failed_result_before_processing(monkeypatch, tmp_path: Pa
 
     cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=1)
     monkeypatch.setattr(
-        fetch_run_submit_spiral_job,
+        fetch_run_submit_job,
         "_load_runtime",
         lambda _worker_config, _queue_root_override: (cfg, object(), object()),
     )
@@ -293,7 +293,7 @@ def test_removes_stale_failed_result_before_processing(monkeypatch, tmp_path: Pa
 
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["x"])
-    rc = fetch_run_submit_spiral_job.run(
+    rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
         server_host="10.15.89.240",

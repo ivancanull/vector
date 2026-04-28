@@ -2,9 +2,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import time
 from typing import Any, Literal
 
 import numpy as np
+
+from common.io_utils import read_json
+from common.job_types import SimulationJob
+from server.queue_manager import QueueManager
+
+from simulation.core import SimulationInput
+from simulation.result_store import SimulationResultStore
+
+try:
+    from ..complex_func import FunctionFromTouchstone
+except ImportError:
+    from src.complex_func import FunctionFromTouchstone
 
 from .datasets import PassiveDataset
 
@@ -115,6 +128,266 @@ class HfssSimulator(Simulator):
             error=None,
             metadata={"case_id": getattr(output, "case_id", request.case_id), "artifacts": getattr(output, "artifacts", None)},
         )
+
+
+class ServerQueueSimulator(Simulator):
+    """Queue-backed real simulator with cache-first touchstone lookup."""
+
+    def __init__(
+        self,
+        *,
+        queue_root: str,
+        variable_order: list[str],
+        unit_map: dict[str, str],
+        template_name: str,
+        port_num: int,
+        result_store: SimulationResultStore,
+        design_name: str | None = None,
+        setup_name: str | None = None,
+        sweep_name: str | None = None,
+        metrics_to_extract: list[str] | None = None,
+        poll_interval_sec: float = 2.0,
+        job_timeout_sec: float = 7200.0,
+        run_id: str = "bo_online",
+        mm_resolution: float = 0.01,
+    ) -> None:
+        super().__init__()
+        self.queue_root = str(queue_root)
+        self.variable_order = list(variable_order)
+        self.unit_map = dict(unit_map)
+        self.template_name = template_name
+        self.design_name = design_name
+        self.setup_name = setup_name
+        self.sweep_name = sweep_name
+        self.metrics_to_extract = list(metrics_to_extract or ["max_s11_db"])
+        self.port_num = int(port_num)
+        self.result_store = result_store
+        self.poll_interval_sec = float(poll_interval_sec)
+        self.job_timeout_sec = float(job_timeout_sec)
+        self.run_id = run_id
+        self.mm_resolution = float(mm_resolution)
+        if self.mm_resolution <= 0:
+            raise ValueError("mm_resolution must be > 0")
+
+        self.queue = QueueManager(self.queue_root)
+        self._next_case_id = 0
+        self._context_iteration: int | None = None
+
+    def set_context(self, *, run_id: str, iteration: int) -> None:
+        self.run_id = str(run_id)
+        self._context_iteration = int(iteration)
+
+    def simulate(self, geometry: np.ndarray) -> SimulationResult:
+        self.num_calls += 1
+        start = time.perf_counter()
+        values = np.asarray(geometry, dtype=float).reshape(-1)
+        if len(values) != len(self.variable_order):
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Geometry dimension mismatch: got {len(values)}, expected {len(self.variable_order)}",
+            )
+
+        case_id = self._build_case_id()
+        quantized_variables = self._quantize_variables(
+            {name: float(values[i]) for i, name in enumerate(self.variable_order)}
+        )
+
+        request = SimulationInput(
+            case_id=case_id,
+            variable_order=list(self.variable_order),
+            variables=quantized_variables,
+        )
+
+        cached = self.result_store.lookup(request)
+        if cached is not None:
+            try:
+                freqs, s_params = self._load_touchstone(cached.touchstone_path)
+            except Exception as exc:
+                self.num_failures += 1
+                return SimulationResult(
+                    freqs=None,
+                    s_params=None,
+                    status="failed",
+                    error=f"Failed to parse cached touchstone: {exc}",
+                    metadata={"cache_hit": True, "case_id": case_id},
+                )
+            self.num_success += 1
+            return SimulationResult(
+                freqs=freqs,
+                s_params=s_params,
+                status="done",
+                metadata={
+                    "cache_hit": True,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": None,
+                    "wait_seconds": 0.0,
+                    "touchstone_path": str(cached.touchstone_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+            )
+
+        job = self._build_job(case_id, request.variables)
+        self.queue.enqueue(job)
+        wait_res = self._wait_job_result(case_id)
+        if wait_res["status"] != "done":
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=str(wait_res.get("error", "simulation_failed")),
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(wait_res.get("result_json_path")) if wait_res.get("result_json_path") else None,
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": None,
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+            )
+
+        result_json_path = wait_res["result_json_path"]
+        payload = read_json(result_json_path)
+        artifact_touchstone = payload.get("artifacts", {}).get("touchstone")
+        if not isinstance(artifact_touchstone, str) or not artifact_touchstone:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error="Result JSON has no touchstone artifact",
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                },
+            )
+
+        touchstone_path = wait_res["queue_root"] / artifact_touchstone
+        try:
+            saved = self.result_store.save(
+                request=request,
+                source_touchstone=touchstone_path,
+                metadata={"source": "queue"},
+            )
+            freqs, s_params = self._load_touchstone(saved.touchstone_path)
+        except Exception as exc:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Failed to parse/save touchstone: {exc}",
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": str(touchstone_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+            )
+
+        self.num_success += 1
+        return SimulationResult(
+            freqs=freqs,
+            s_params=s_params,
+            status="done",
+            metadata={
+                "cache_hit": False,
+                "job_id": case_id,
+                "case_id": case_id,
+                "result_json_path": str(result_json_path),
+                "wait_seconds": float(wait_res["wait_seconds"]),
+                "touchstone_path": str(saved.touchstone_path),
+                "simulator_elapsed_sec": float(time.perf_counter() - start),
+            },
+        )
+
+    def _quantize_variables(self, variables: dict[str, float]) -> dict[str, float]:
+        quantized: dict[str, float] = {}
+        for name in self.variable_order:
+            value = float(variables[name])
+            unit = self.unit_map.get(name, "")
+            if unit == "mm":
+                snapped = round(value / self.mm_resolution) * self.mm_resolution
+                quantized[name] = float(round(snapped, 8))
+            else:
+                quantized[name] = value
+        return quantized
+
+    def _build_case_id(self) -> str:
+        if self._context_iteration is not None:
+            case_id = f"{self.run_id}_it{self._context_iteration:04d}"
+            self._context_iteration = None
+            return case_id
+        case_id = f"{self.run_id}_it{self._next_case_id:04d}"
+        self._next_case_id += 1
+        return case_id
+
+    def _build_job(self, case_id: str, variables: dict[str, float]) -> SimulationJob:
+        formatted: dict[str, str] = {}
+        for name in self.variable_order:
+            unit = self.unit_map.get(name)
+            if not unit:
+                raise ValueError(f"Missing unit for variable {name}")
+            formatted[name] = f"{variables[name]:g}{unit}"
+        return SimulationJob(
+            job_id=case_id,
+            template_name=self.template_name,
+            variables=formatted,
+            output_filename=f"{case_id}.s{self.port_num}p",
+            metrics_to_extract=list(self.metrics_to_extract),
+            design_name=self.design_name,
+            setup_name=self.setup_name,
+            sweep_name=self.sweep_name,
+        )
+
+    def _wait_job_result(self, case_id: str) -> dict[str, Any]:
+        queue_root = self.queue.root
+        done_path = queue_root / "done" / f"{case_id}.result.json"
+        failed_path = queue_root / "failed" / f"{case_id}.result.json"
+        start = time.perf_counter()
+        while True:
+            if done_path.exists():
+                return {
+                    "status": "done",
+                    "result_json_path": done_path,
+                    "wait_seconds": float(time.perf_counter() - start),
+                    "queue_root": queue_root,
+                }
+            if failed_path.exists():
+                payload = read_json(failed_path)
+                return {
+                    "status": "failed",
+                    "result_json_path": failed_path,
+                    "wait_seconds": float(time.perf_counter() - start),
+                    "queue_root": queue_root,
+                    "error": payload.get("error_message", "simulation_failed"),
+                }
+            if (time.perf_counter() - start) >= self.job_timeout_sec:
+                return {
+                    "status": "failed",
+                    "result_json_path": None,
+                    "wait_seconds": float(time.perf_counter() - start),
+                    "queue_root": queue_root,
+                    "error": "job_timeout",
+                }
+            time.sleep(self.poll_interval_sec)
+
+    def _load_touchstone(self, touchstone_path: Any) -> tuple[np.ndarray, np.ndarray]:
+        parser = FunctionFromTouchstone(port_num=self.port_num)
+        parser.parse(str(touchstone_path))
+        s_params = parser.evaluate_all()
+        return np.asarray(parser.freq, dtype=float), np.asarray(s_params, dtype=complex)
 
 
 @dataclass(frozen=True)
