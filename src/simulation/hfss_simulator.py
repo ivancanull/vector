@@ -19,6 +19,7 @@ except ImportError:
     from worker.utils import WorkerError, utc_now
 
 from .core import SimulationError, SimulationInput, SimulationOutput, Simulator
+from .result_store import SimulationResultStore
 
 
 class HfssExecutor(Protocol):
@@ -44,6 +45,7 @@ class RealHfssSimulator(Simulator):
         variable_order: list[str],
         metrics_to_extract: list[str] | None = None,
         executor: HfssExecutor | None = None,
+        result_store: SimulationResultStore | None = None,
     ) -> None:
         self.template_cfg = template_cfg
         self.worker_cfg = worker_cfg
@@ -52,6 +54,7 @@ class RealHfssSimulator(Simulator):
         self.variable_order = list(variable_order)
         self.metrics_to_extract = metrics_to_extract or ["max_s11_db"]
         self.executor = executor or HfssJobExecutor.default()
+        self.result_store = result_store
 
     def simulate(self, request: SimulationInput) -> SimulationOutput:
         if list(request.variable_order) != self.variable_order:
@@ -60,6 +63,19 @@ class RealHfssSimulator(Simulator):
                 "invalid_variables",
                 f"Expected variable order {self.variable_order}, got {request.variable_order}",
             )
+
+        if self.result_store is not None:
+            cached = self.result_store.lookup(request)
+            if cached is not None:
+                freqs, s_params = self._parse_touchstone(request.case_id, cached.touchstone_path)
+                return SimulationOutput(
+                    case_id=request.case_id,
+                    geo_params=request.geo_params(),
+                    freqs=freqs,
+                    s_params=s_params,
+                    artifacts={"touchstone": cached.touchstone_path},
+                    metadata={"cache_hit": True, "cache_key": cached.key, "cache_filename": cached.filename},
+                )
 
         job = self._build_job(request)
         try:
@@ -75,13 +91,20 @@ class RealHfssSimulator(Simulator):
             )
 
         touchstone_path = self._resolve_touchstone_path(request.case_id, result)
-        freqs, s_params = self._parse_touchstone(request.case_id, touchstone_path)
+        final_touchstone = touchstone_path
+        cache_metadata = {"cache_hit": False}
+        if self.result_store is not None:
+            saved = self.result_store.save(request, touchstone_path, metadata={"source": "hfss"})
+            final_touchstone = saved.touchstone_path
+            cache_metadata = {"cache_hit": False, "cache_key": saved.key, "cache_filename": saved.filename}
+        freqs, s_params = self._parse_touchstone(request.case_id, final_touchstone)
         return SimulationOutput(
             case_id=request.case_id,
             geo_params=request.geo_params(),
             freqs=freqs,
             s_params=s_params,
-            artifacts={"touchstone": touchstone_path},
+            artifacts={"touchstone": final_touchstone},
+            metadata=cache_metadata,
         )
 
     def _build_job(self, request: SimulationInput) -> JobRequest:

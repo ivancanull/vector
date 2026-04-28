@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -31,6 +32,7 @@ class SimulationOutput:
     freqs: np.ndarray
     s_params: np.ndarray
     artifacts: dict[str, Path] | None = None
+    metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "geo_params", np.asarray(self.geo_params, dtype=float))

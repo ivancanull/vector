@@ -198,3 +198,9 @@ plot_utils.py
 /queue/**/*.csv
 /queue/**/*.snp
 /queue/**/*.s?p
+
+# experiment artifacts
+experiments/
+
+# legacy scripts
+scripts/legacy/

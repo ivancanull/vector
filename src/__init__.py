@@ -11,3 +11,4 @@ from .loader import *
 from .regularizer import *
 from .train import *
 from .config import *
+from .optimization import *

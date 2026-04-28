@@ -15,6 +15,7 @@ except ImportError:
 from .core import Simulator
 from .dataset_simulator import DatasetSimulator
 from .hfss_simulator import HfssExecutor, RealHfssSimulator
+from .result_store import SimulationResultStore
 
 
 class SimulatorFactory:
@@ -57,6 +58,7 @@ class SimulatorFactory:
         variable_order: list[str],
         metrics_to_extract: list[str] | None = None,
         executor: HfssExecutor | None = None,
+        result_store: SimulationResultStore | None = None,
     ) -> RealHfssSimulator:
         return RealHfssSimulator(
             template_cfg=template_cfg,
@@ -66,6 +68,7 @@ class SimulatorFactory:
             variable_order=variable_order,
             metrics_to_extract=metrics_to_extract,
             executor=executor,
+            result_store=result_store,
         )
 
     @staticmethod
