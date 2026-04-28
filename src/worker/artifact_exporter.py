@@ -69,9 +69,16 @@ def verify_artifacts_exist(
         raise WorkerError("export_failure", f"Missing csv: {paths.csv}")
 
 
-def to_result_artifacts(paths: LocalArtifactPaths, queue_root: Path) -> ArtifactPaths:
+def to_result_artifacts(
+    paths: LocalArtifactPaths,
+    queue_root: Path,
+    *,
+    include_touchstone: bool,
+    include_csv: bool,
+    include_log: bool = True,
+) -> ArtifactPaths:
     return ArtifactPaths(
-        touchstone=as_posix_rel(paths.touchstone, queue_root),
-        csv=as_posix_rel(paths.csv, queue_root),
-        log=as_posix_rel(paths.log, queue_root),
+        touchstone=as_posix_rel(paths.touchstone, queue_root) if include_touchstone else None,
+        csv=as_posix_rel(paths.csv, queue_root) if include_csv else None,
+        log=as_posix_rel(paths.log, queue_root) if include_log else None,
     )

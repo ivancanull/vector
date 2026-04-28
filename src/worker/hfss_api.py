@@ -201,7 +201,13 @@ class HfssArtifactPlanner:
         need_csv: bool,
     ) -> ArtifactPaths:
         verify_artifacts_exist(local_artifacts, need_touchstone, need_csv)
-        return to_result_artifacts(local_artifacts, worker_cfg.queue_root)
+        return to_result_artifacts(
+            local_artifacts,
+            worker_cfg.queue_root,
+            include_touchstone=need_touchstone,
+            include_csv=need_csv,
+            include_log=True,
+        )
 
 
 class HfssJobExecutor:

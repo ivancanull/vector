@@ -228,26 +228,28 @@ def _collect_upload_bundle(queue_root: Path, result_json_path: Path) -> list[tup
         raise FileNotFoundError(f"Result JSON not found: {result_json_path}")
 
     payload = read_json(result_json_path)
-    files: list[Path] = [result_json_path]
+    files: list[tuple[str, Path]] = [("result_json", result_json_path)]
     artifacts = payload.get("artifacts")
     if isinstance(artifacts, dict):
         for key in ("touchstone", "csv", "log"):
             rel_path = artifacts.get(key)
             if isinstance(rel_path, str) and rel_path:
-                files.append(queue_root / rel_path)
+                files.append((key, queue_root / rel_path))
 
-    deduped: list[Path] = []
+    deduped: list[tuple[str, Path]] = []
     seen: set[Path] = set()
-    for path in files:
+    for kind, path in files:
         normalized = path.resolve()
         if normalized in seen:
             continue
         seen.add(normalized)
-        deduped.append(path)
+        deduped.append((kind, path))
 
     bundle: list[tuple[Path, Path]] = []
-    for local_path in deduped:
+    for kind, local_path in deduped:
         if not local_path.exists():
+            if kind in {"csv", "log"}:
+                continue
             raise FileNotFoundError(f"Referenced artifact missing: {local_path}")
         rel_path = _relative_to_queue(queue_root, local_path)
         bundle.append((local_path, rel_path))
