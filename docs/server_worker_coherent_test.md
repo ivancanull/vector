@@ -12,7 +12,7 @@ Recommended Windows command:
 cd D:\vector
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
-  --worker-config configs\worker.spiral_local.yaml `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
@@ -25,7 +25,7 @@ One-iteration smoke test:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
-  --worker-config configs\worker.spiral_local.yaml `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `

@@ -71,7 +71,7 @@ Run the continuous fetch-run-submit worker:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
-  --worker-config configs\worker.spiral_local.yaml `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
@@ -84,7 +84,7 @@ Run one job and exit:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_spiral_job.py `
-  --worker-config configs\worker.spiral_local.yaml `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `

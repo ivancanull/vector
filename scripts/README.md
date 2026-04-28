@@ -72,7 +72,7 @@ Continuously claim remote server jobs over SFTP, run each job locally, upload th
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
-  --worker-config configs\worker.spiral_local.yaml `
+  --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
