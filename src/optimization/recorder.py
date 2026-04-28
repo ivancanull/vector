@@ -64,14 +64,25 @@ class ExperimentRecorder:
     def _write_trials_csv(self, path: Path, trials: list[dict[str, Any]]) -> None:
         base_fields = [
             "iteration",
+            "step",
             "phase",
             "dataset_index",
+            "geometry",
             "case_id",
             "objective",
             "predicted_mean",
             "predicted_uncertainty",
             "acquisition_score",
             "best_so_far",
+            "cache_hit",
+            "job_id",
+            "simulation_status",
+            "simulation_error",
+            "t_engine_sec",
+            "t_simulator_sec",
+            "t_iteration_sec",
+            "t_engine_cum_sec",
+            "t_simulator_cum_sec",
         ]
         metric_names: list[str] = []
         for row in trials:

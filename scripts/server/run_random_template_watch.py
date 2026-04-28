@@ -1,28 +1,13 @@
 from __future__ import annotations
 
-# Recommended coherent server-side test command:
-#
-#   cd /home/zhanghf/projects/vector
-#   PYTHONPATH=src:. python scripts/server/submit_random_bclf_watch.py \
-#     --queue-root queue \
-#     --count 5 \
-#     --seed 123 \
-#     --timeout-sec 7200 \
-#     --poll-interval-sec 10
-#
-# Defaults align to your original HFSS export names: Design=HFSSDesign1,
-# Setup=Setup1, Solution/Sweep=Sweep.
-
 import argparse
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import random
-import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = REPO_ROOT / "src"
@@ -37,9 +22,14 @@ from server.experiment_models import (  # noqa: E402
     DesignSpace,
     Experiment,
     ExperimentObjective,
+    SpiralInductorExperiment,
+    SpiralVariableRanges,
     VariableSpec,
 )
 from server.queue_manager import QueueManager  # noqa: E402
+
+
+SUPPORTED_TEMPLATES = {"bclf_template_v1", "si_template_v1"}
 
 
 @dataclass(frozen=True)
@@ -98,11 +88,11 @@ def _str_p(value: float) -> str:
     return text.replace("-", "m").replace(".", "d")
 
 
-def _now_batch_id() -> str:
-    return "bclf_random_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+def _now_batch_id(prefix: str) -> str:
+    return f"{prefix}_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
 
 
-def _default_design_space(ranges: BclfVariableRanges) -> DesignSpace:
+def _default_bclf_design_space(ranges: BclfVariableRanges) -> DesignSpace:
     ranges.validate()
     return DesignSpace(
         variable_specs={
@@ -123,16 +113,16 @@ def generate_random_bclf_experiment(
     batch_id: str,
     count: int,
     seed: int | None,
-    ranges: BclfVariableRanges,
     template_name: str,
-    design_name: str | None,
-    setup_name: str | None,
-    sweep_name: str | None,
+    design_name: str,
+    setup_name: str,
+    sweep_name: str,
 ) -> Experiment:
     if count <= 0:
         raise ValueError("count must be positive")
 
-    ds = _default_design_space(ranges)
+    ranges = BclfVariableRanges()
+    ds = _default_bclf_design_space(ranges)
     rng = random.Random(seed)
 
     cases: list[CaseVariant] = []
@@ -188,19 +178,19 @@ def generate_random_bclf_experiment(
     return experiment
 
 
-def generate_random_bclf_batch(
+def generate_random_spiral_experiment(
     *,
     batch_id: str,
     count: int,
     seed: int | None,
-    ranges: BclfVariableRanges,
     template_name: str,
-    design_name: str | None,
-    setup_name: str | None,
-    sweep_name: str | None,
-):
-    experiment = generate_random_bclf_experiment(
-        batch_id=batch_id,
+    design_name: str,
+    setup_name: str,
+    sweep_name: str,
+) -> Experiment:
+    ranges = SpiralVariableRanges()
+    return SpiralInductorExperiment.from_random(
+        experiment_id=batch_id,
         count=count,
         seed=seed,
         ranges=ranges,
@@ -209,13 +199,39 @@ def generate_random_bclf_batch(
         setup_name=setup_name,
         sweep_name=sweep_name,
     )
-    return to_batch_simulation_job(experiment)
 
 
-def submit_random_batch(queue_root: Path, batch) -> list[Path]:
-    ensure_runtime_dirs(queue_root, REPO_ROOT / "logs")
-    manager = QueueManager(queue_root)
-    return manager.enqueue_batch(batch)
+def _build_experiment(
+    *,
+    template_name: str,
+    batch_id: str,
+    count: int,
+    seed: int | None,
+    design_name: str,
+    setup_name: str,
+    sweep_name: str,
+) -> Experiment:
+    if template_name == "bclf_template_v1":
+        return generate_random_bclf_experiment(
+            batch_id=batch_id,
+            count=count,
+            seed=seed,
+            template_name=template_name,
+            design_name=design_name,
+            setup_name=setup_name,
+            sweep_name=sweep_name,
+        )
+    if template_name == "si_template_v1":
+        return generate_random_spiral_experiment(
+            batch_id=batch_id,
+            count=count,
+            seed=seed,
+            template_name=template_name,
+            design_name=design_name,
+            setup_name=setup_name,
+            sweep_name=sweep_name,
+        )
+    raise ValueError(f"Unsupported template-name: {template_name}")
 
 
 def _job_id_for(batch_id: str, case: Any) -> str:
@@ -295,31 +311,27 @@ def watch_results(
 
 def print_summary(
     *,
+    template_name: str,
     expected_jobs: dict[str, dict[str, str]],
     finished: dict[str, ResultSummary],
     missing: set[str],
 ) -> None:
     print("")
-    print("Final random BCLF batch summary")
-    print("job_id,status,L,L1,L2,W,W1,W2,S1,S2,result")
+    print(f"Final random batch summary template={template_name}")
     for job_id in sorted(expected_jobs):
         variables = expected_jobs[job_id]
         summary = finished.get(job_id)
         if summary is None:
             status = "missing"
             result_text = "missing_result"
+        elif summary.status == "done":
+            status = "done"
+            result_text = ", ".join(f"{k}={v}" for k, v in sorted((summary.metrics or {}).items()))
         else:
             status = summary.status
-            if summary.status == "done":
-                result_text = ", ".join(f"{k}={v}" for k, v in sorted((summary.metrics or {}).items()))
-            else:
-                result_text = f"error={summary.error_message}"
+            result_text = f"error={summary.error_message}"
 
-        print(
-            f"{job_id},{status},{variables.get('L')},{variables.get('L1')},{variables.get('L2')},"
-            f"{variables.get('W')},{variables.get('W1')},{variables.get('W2')},"
-            f"{variables.get('S1')},{variables.get('S2')},{result_text}"
-        )
+        print(f"job_id={job_id} status={status} variables={variables} result={result_text}")
 
     if missing:
         print("")
@@ -328,99 +340,48 @@ def print_summary(
             print(job_id)
 
 
-def export_done_touchstones(
-    *,
-    queue_root: Path,
-    finished: dict[str, ResultSummary],
-    export_dir: Path,
-) -> list[Path]:
-    export_dir.mkdir(parents=True, exist_ok=True)
-    copied: list[Path] = []
-    for summary in finished.values():
-        if summary.status != "done":
-            continue
-        touchstone_rel = summary.artifacts.get("touchstone")
-        if not isinstance(touchstone_rel, str) or not touchstone_rel:
-            continue
-        src = queue_root / Path(touchstone_rel)
-        if not src.exists():
-            continue
-        dst = export_dir / src.name
-        shutil.copy2(src, dst)
-        copied.append(dst)
-    return copied
+def submit_random_batch(queue_root: Path, experiment: Experiment) -> tuple[list[Path], dict[str, dict[str, str]], str]:
+    ensure_runtime_dirs(queue_root, REPO_ROOT / "logs")
+    manager = QueueManager(queue_root)
+    batch = to_batch_simulation_job(experiment)
+    emitted = manager.enqueue_batch(batch)
+    expected_jobs = {_job_id_for(batch.batch_id, case): case.variables for case in batch.cases}
+    return emitted, expected_jobs, batch.batch_id
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Submit random BCLF jobs and watch for worker results."
+        description="Submit random jobs by template and watch for worker results."
     )
+    parser.add_argument("--template-name", required=True, choices=sorted(SUPPORTED_TEMPLATES))
     parser.add_argument("--queue-root", type=Path, default=REPO_ROOT / "queue")
-    parser.add_argument(
-        "--export-dir",
-        type=Path,
-        default=REPO_ROOT / "data" / "bandpass_coupled_line_filter_export" / "ext",
-    )
     parser.add_argument("--batch-id", default=None)
     parser.add_argument("--count", type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--timeout-sec", type=int, default=7200)
     parser.add_argument("--poll-interval-sec", type=int, default=10)
-
-    parser.add_argument("--template-name", default="bclf_template_v1")
     parser.add_argument("--design-name", default="HFSSDesign1")
     parser.add_argument("--setup-name", default="Setup1")
     parser.add_argument("--sweep-name", default="Sweep")
-
-    parser.add_argument("--unit", default="mm")
-    parser.add_argument("--l-min", type=float, default=7.7)
-    parser.add_argument("--l-max", type=float, default=7.9)
-    parser.add_argument("--l1-min", type=float, default=8.0)
-    parser.add_argument("--l1-max", type=float, default=8.2)
-    parser.add_argument("--l2-min", type=float, default=7.8)
-    parser.add_argument("--l2-max", type=float, default=8.0)
-    parser.add_argument("--w-min", type=float, default=0.9)
-    parser.add_argument("--w-max", type=float, default=1.1)
-    parser.add_argument("--w1-min", type=float, default=0.7)
-    parser.add_argument("--w1-max", type=float, default=0.9)
-    parser.add_argument("--w2-min", type=float, default=0.9)
-    parser.add_argument("--w2-max", type=float, default=1.1)
-    parser.add_argument("--s1-min", type=float, default=0.13)
-    parser.add_argument("--s1-max", type=float, default=0.16)
-    parser.add_argument("--s2-min", type=float, default=0.55)
-    parser.add_argument("--s2-max", type=float, default=0.6)
     return parser.parse_args()
 
 
 def run(args: argparse.Namespace) -> int:
-    batch_id = args.batch_id or _now_batch_id()
-    ranges = BclfVariableRanges(
-        l_min=args.l_min,
-        l_max=args.l_max,
-        l1_min=args.l1_min,
-        l1_max=args.l1_max,
-        l2_min=args.l2_min,
-        l2_max=args.l2_max,
-        w_min=args.w_min,
-        w_max=args.w_max,
-        w1_min=args.w1_min,
-        w1_max=args.w1_max,
-        w2_min=args.w2_min,
-        w2_max=args.w2_max,
-        s1_min=args.s1_min,
-        s1_max=args.s1_max,
-        s2_min=args.s2_min,
-        s2_max=args.s2_max,
-        unit=args.unit,
-    )
+    if args.count <= 0:
+        print("invalid_args=count must be positive", file=sys.stderr)
+        return 2
+
+    batch_id = args.batch_id
+    if batch_id is None:
+        prefix = "bclf_random" if args.template_name == "bclf_template_v1" else "spiral_random"
+        batch_id = _now_batch_id(prefix)
 
     try:
-        batch = generate_random_bclf_batch(
+        experiment = _build_experiment(
+            template_name=args.template_name,
             batch_id=batch_id,
             count=args.count,
             seed=args.seed,
-            ranges=ranges,
-            template_name=args.template_name,
             design_name=args.design_name,
             setup_name=args.setup_name,
             sweep_name=args.sweep_name,
@@ -429,17 +390,14 @@ def run(args: argparse.Namespace) -> int:
         print(f"invalid_args={exc}", file=sys.stderr)
         return 2
 
-    emitted = submit_random_batch(args.queue_root, batch)
-    expected_jobs = {
-        _job_id_for(batch.batch_id, case): case.variables
-        for case in batch.cases
-    }
+    emitted, expected_jobs, resolved_batch_id = submit_random_batch(args.queue_root, experiment)
 
-    print(f"batch_id={batch.batch_id}")
+    print(f"template_name={args.template_name}")
+    print(f"batch_id={resolved_batch_id}")
     print(
         "setup_sweep_override="
-        f"{batch.setup_name if batch.setup_name else '<template-default>'}/"
-        f"{batch.sweep_name if batch.sweep_name else '<template-default>'}"
+        f"{args.setup_name if args.setup_name else '<template-default>'}/"
+        f"{args.sweep_name if args.sweep_name else '<template-default>'}"
     )
     for path in emitted:
         print(f"submitted={path}")
@@ -451,14 +409,12 @@ def run(args: argparse.Namespace) -> int:
         timeout_sec=args.timeout_sec,
         poll_interval_sec=args.poll_interval_sec,
     )
-    copied = export_done_touchstones(
-        queue_root=args.queue_root,
+    print_summary(
+        template_name=args.template_name,
+        expected_jobs=expected_jobs,
         finished=finished,
-        export_dir=args.export_dir,
+        missing=missing,
     )
-    for path in copied:
-        print(f"exported={path}")
-    print_summary(expected_jobs=expected_jobs, finished=finished, missing=missing)
     return 1 if missing else 0
 
 

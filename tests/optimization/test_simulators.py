@@ -6,7 +6,32 @@ from pathlib import Path
 import numpy as np
 
 from optimization.datasets import PassiveDataset
-from optimization.simulators import HfssSimulator, ReplaySimulator
+from optimization.simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator
+
+
+class _FakeCached:
+    def __init__(self, path: Path) -> None:
+        self.touchstone_path = path
+        self.filename = path.name
+        self.key = "k"
+        self.metadata = {}
+
+
+class _FakeStore:
+    def __init__(self, *, cached_path: Path | None = None) -> None:
+        self.cached_path = cached_path
+        self.lookup_calls = 0
+        self.save_calls = 0
+
+    def lookup(self, request):  # type: ignore[no-untyped-def]
+        self.lookup_calls += 1
+        if self.cached_path is None:
+            return None
+        return _FakeCached(self.cached_path)
+
+    def save(self, request, source_touchstone, metadata=None):  # type: ignore[no-untyped-def]
+        self.save_calls += 1
+        return _FakeCached(Path(source_touchstone))
 
 
 def _write_payload(path: Path) -> None:
@@ -75,3 +100,126 @@ def test_hfss_simulator_adapter_success_and_failure() -> None:
     assert sim.num_calls == 2
     assert sim.num_success == 1
     assert sim.num_failures == 1
+
+
+def test_server_queue_simulator_cache_hit_skips_enqueue(tmp_path: Path, monkeypatch) -> None:
+    queue_root = tmp_path / "queue"
+    (queue_root / "pending").mkdir(parents=True, exist_ok=True)
+    touchstone = tmp_path / "cached.s2p"
+    touchstone.write_text("dummy", encoding="utf-8")
+
+    store = _FakeStore(cached_path=touchstone)
+    simulator = ServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="run_cache",
+    )
+    monkeypatch.setattr(
+        simulator,
+        "_load_touchstone",
+        lambda _path: (np.array([1.0, 2.0]), np.zeros((2, 2, 2), dtype=complex)),
+    )
+
+    out = simulator.simulate(np.array([7.8, 1.0]))
+    assert out.status == "done"
+    assert out.metadata is not None and out.metadata["cache_hit"] is True
+    assert store.lookup_calls == 1
+    assert store.save_calls == 0
+    assert list((queue_root / "pending").glob("*.json")) == []
+
+
+def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeypatch) -> None:
+    queue_root = tmp_path / "queue"
+    for name in ("pending", "done", "failed", "results"):
+        (queue_root / name).mkdir(parents=True, exist_ok=True)
+
+    store = _FakeStore(cached_path=None)
+    simulator = ServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="run_miss",
+        poll_interval_sec=0.01,
+        job_timeout_sec=0.3,
+    )
+    simulator.set_context(run_id="run_miss", iteration=0)
+    job_id = "run_miss_it0000"
+    touchstone = queue_root / "results" / f"{job_id}.s2p"
+    touchstone.write_text("dummy", encoding="utf-8")
+    (queue_root / "done" / f"{job_id}.result.json").write_text(
+        (
+            '{\n'
+            f'  "job_id": "{job_id}",\n'
+            '  "status": "done",\n'
+            f'  "artifacts": {{"touchstone": "results/{job_id}.s2p"}}\n'
+            '}\n'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        simulator,
+        "_load_touchstone",
+        lambda _path: (np.array([1.0, 2.0]), np.zeros((2, 2, 2), dtype=complex)),
+    )
+
+    out = simulator.simulate(np.array([7.8, 1.0]))
+    assert out.status == "done"
+    assert out.metadata is not None and out.metadata["cache_hit"] is False
+    assert store.lookup_calls == 1
+    assert store.save_calls == 1
+    # enqueue happened before done-read
+    assert (queue_root / "pending" / f"{job_id}.json").exists()
+
+
+def test_server_queue_simulator_failed_and_timeout(tmp_path: Path, monkeypatch) -> None:
+    queue_root = tmp_path / "queue"
+    for name in ("pending", "done", "failed", "results"):
+        (queue_root / name).mkdir(parents=True, exist_ok=True)
+
+    store = _FakeStore(cached_path=None)
+    simulator = ServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="run_fail",
+        poll_interval_sec=0.01,
+        job_timeout_sec=0.05,
+    )
+    monkeypatch.setattr(
+        simulator,
+        "_load_touchstone",
+        lambda _path: (np.array([1.0]), np.zeros((2, 2, 1), dtype=complex)),
+    )
+
+    simulator.set_context(run_id="run_fail", iteration=1)
+    fail_id = "run_fail_it0001"
+    (queue_root / "failed" / f"{fail_id}.result.json").write_text(
+        (
+            '{\n'
+            f'  "job_id": "{fail_id}",\n'
+            '  "status": "failed",\n'
+            '  "error_message": "mesh_failure",\n'
+            '  "artifacts": {"log": "results/fail.log"}\n'
+            '}\n'
+        ),
+        encoding="utf-8",
+    )
+    failed = simulator.simulate(np.array([7.8, 1.0]))
+    assert failed.status == "failed"
+    assert failed.error == "mesh_failure"
+
+    # Timeout path.
+    simulator.set_context(run_id="run_fail", iteration=2)
+    timed = simulator.simulate(np.array([7.7, 0.9]))
+    assert timed.status == "failed"
+    assert timed.error == "job_timeout"

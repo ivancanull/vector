@@ -26,7 +26,8 @@ from .objectives import (
 )
 from .recorder import ExperimentRecorder, RecorderOutput
 from .replay_optimizer import BaseOptimizer, OptimizationState, ReplayOptimizer, RunResult
-from .simulators import HfssSimulator, ReplaySimulator, SimulationResult, Simulator
+from .online_optimizer import OnlineBOOptimizer, OnlineOptimizationState, OnlineRunResult
+from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
 from .surrogates import ANNSurrogate, BNNSurrogate, GPSurrogate, SurrogateModel
 from .types import EvaluationRecord
 
@@ -58,6 +59,9 @@ __all__ = [
     "ObjectiveFunction",
     "ObjectiveResult",
     "ObjectiveTerm",
+    "OnlineBOOptimizer",
+    "OnlineOptimizationState",
+    "OnlineRunResult",
     "PassbandMeanS21DbMetric",
     "PeakFrequencyMetric",
     "SParameterResponse",
@@ -68,6 +72,7 @@ __all__ = [
     "RecorderOutput",
     "ReplayOptimizer",
     "ReplaySimulator",
+    "ServerQueueSimulator",
     "RunResult",
     "SimulationResult",
     "Simulator",

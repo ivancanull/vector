@@ -14,19 +14,38 @@ Optional queue root override:
 .\.venv\Scripts\python.exe scripts\server\submit_spiral_batch.py --batch <path-to-batch.json> --queue-root queue
 ```
 
-## Server: Submit Five Random Cases And Watch
+## Server: Submit Random Cases And Watch (Unified)
 
-Generate five random spiral cases, submit them to `queue/pending`, then watch for the worker-uploaded results.
+Submit random cases and watch worker results using one script selected by template.
+Ranges are built into the script (not CLI inputs).
+
+SI / spiral example:
 
 ```bash
 cd /home/zhanghf/projects/vector
-PYTHONPATH=src:. python scripts/server/submit_random_spiral_watch.py \
+PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
+  --template-name si_template_v1 \
   --queue-root queue \
   --count 5 \
   --seed 123 \
   --timeout-sec 7200 \
   --poll-interval-sec 10
 ```
+
+BCLF example:
+
+```bash
+cd /home/zhanghf/projects/vector
+PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
+  --template-name bclf_template_v1 \
+  --queue-root queue \
+  --count 5 \
+  --seed 123 \
+  --timeout-sec 7200 \
+  --poll-interval-sec 10
+```
+
+This script does not copy/export artifacts. Results stay in queue directories for external transfer scripts.
 
 See `docs/server_worker_coherent_test.md` for the paired Windows worker command and troubleshooting notes.
 
@@ -85,3 +104,12 @@ Preview only (no deletion):
 - Success results: `queue/done/*.result.json`
 - Failure results: `queue/failed/*.result.json`
 - Artifacts/logs: `queue/results/*`
+
+## Notebook: Online BO Campaign
+
+Use `notebooks/bo_online_campaign.ipynb` for real-simulator BO campaigns with resume support.
+
+- Each execution runs only one seed.
+- Completed seeds are tracked in `experiments/bo_online/campaign_summary.csv`.
+- Per-seed checkpoints are kept as `experiments/bo_online/bo_online_seed{seed}.checkpoint.json`.
+- Re-run the notebook later to continue remaining seeds automatically.
