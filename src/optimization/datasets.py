@@ -7,7 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from .objectives import Objective, build_bclf_objective
+from .objectives import Objective
+from .optimization_spec import BCLFOptimizationSpec
 
 
 class PassiveDataset(ABC):
@@ -45,6 +46,13 @@ class PassiveDataset(ABC):
         self.samples = [self.preprocess_sample(item) for item in samples]
         self.X_pool = np.asarray([item["geo_params"] for item in self.samples], dtype=float)
         self.S_pool = [np.asarray(item["s_params"], dtype=complex) for item in self.samples]
+        if self.X_pool.ndim != 2:
+            raise ValueError(f"geo_params must form a 2D matrix, got shape={self.X_pool.shape}")
+        if self.X_pool.shape[1] != len(self.variable_order):
+            raise ValueError(
+                "variable_order dimension mismatch: "
+                f"got len(variable_order)={len(self.variable_order)} but geometry dimension={self.X_pool.shape[1]}"
+            )
 
         n = len(self.samples)
         self.default_train_indices = self._normalize_indices(default_train_indices or [], n)
@@ -168,10 +176,11 @@ class BCLFDataset(PassiveDataset):
     """Thin BCLF-specific dataset adapter with sensible defaults."""
 
     DEFAULT_VARIABLE_ORDER = ["Din", "S", "W"]
+    DEFAULT_FILTER_VARIABLE_ORDER = ["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"]
 
     @staticmethod
     def default_objective() -> Objective:
-        return build_bclf_objective()
+        return BCLFOptimizationSpec().to_objective()
 
     @classmethod
     def from_pickle(
@@ -186,9 +195,11 @@ class BCLFDataset(PassiveDataset):
         match_atol: float = 1e-9,
         match_rtol: float = 1e-9,
     ) -> "BCLFDataset":
+        if variable_order is None:
+            variable_order = cls._infer_variable_order_from_payload(path)
         return super().from_pickle(
             path,
-            variable_order=variable_order or cls.DEFAULT_VARIABLE_ORDER,
+            variable_order=variable_order,
             freqs=freqs,
             device_name=device_name,
             port_names=port_names,
@@ -196,3 +207,20 @@ class BCLFDataset(PassiveDataset):
             match_atol=match_atol,
             match_rtol=match_rtol,
         )
+
+    @classmethod
+    def _infer_variable_order_from_payload(cls, path: str | Path) -> list[str]:
+        payload_path = Path(path)
+        with payload_path.open("rb") as f:
+            payload = pickle.load(f)
+        samples, _ = cls._parse_payload(payload)
+        first = samples[0]
+        if "geo_params" not in first:
+            return list(cls.DEFAULT_VARIABLE_ORDER)
+        geo = np.asarray(first["geo_params"], dtype=float).reshape(-1)
+        dim = int(geo.shape[0])
+        if dim == len(cls.DEFAULT_FILTER_VARIABLE_ORDER):
+            return list(cls.DEFAULT_FILTER_VARIABLE_ORDER)
+        if dim == len(cls.DEFAULT_VARIABLE_ORDER):
+            return list(cls.DEFAULT_VARIABLE_ORDER)
+        return [f"x{i}" for i in range(dim)]

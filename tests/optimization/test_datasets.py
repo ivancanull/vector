@@ -113,4 +113,4 @@ def test_bclf_dataset_defaults_apply(tmp_path: Path) -> None:
     assert desc["type"] == "objective_function"
     assert desc["minimize"] is True
     assert len(desc["terms"]) >= 1
-    assert len(desc["constraints"]) == 4
+    assert len(desc["constraints"]) == 0

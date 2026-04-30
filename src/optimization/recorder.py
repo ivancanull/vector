@@ -67,12 +67,18 @@ class ExperimentRecorder:
             "step",
             "phase",
             "dataset_index",
+            "requested_geometry",
             "geometry",
+            "geometry_normalized",
             "case_id",
             "objective",
+            "objective_array",
+            "constraints_array",
             "predicted_mean",
             "predicted_uncertainty",
             "acquisition_score",
+            "feasible",
+            "constraint_margin_min",
             "best_so_far",
             "cache_hit",
             "job_id",
@@ -83,20 +89,49 @@ class ExperimentRecorder:
             "t_iteration_sec",
             "t_engine_cum_sec",
             "t_simulator_cum_sec",
+            "optimizer_backend",
+            "selection_debug",
         ]
         metric_names: list[str] = []
+        objective_component_names: list[str] = []
+        constraint_metric_names: list[str] = []
+        constraint_violation_names: list[str] = []
         for row in trials:
             for name in row.get("metrics", {}).keys():
                 if name not in metric_names:
                     metric_names.append(name)
+            for name in row.get("objective_components", {}).keys():
+                if name not in objective_component_names:
+                    objective_component_names.append(name)
+            for name in row.get("constraint_metrics", {}).keys():
+                if name not in constraint_metric_names:
+                    constraint_metric_names.append(name)
+            for name in row.get("constraint_violations", {}).keys():
+                if name not in constraint_violation_names:
+                    constraint_violation_names.append(name)
 
-        headers = base_fields + [f"metric_{name}" for name in metric_names]
+        headers = (
+            base_fields
+            + [f"objective_component_{name}" for name in objective_component_names]
+            + [f"constraint_metric_{name}" for name in constraint_metric_names]
+            + [f"constraint_violation_{name}" for name in constraint_violation_names]
+            + [f"metric_{name}" for name in metric_names]
+        )
         with path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
             writer.writeheader()
             for row in trials:
                 output = {name: row.get(name) for name in base_fields}
                 metrics = row.get("metrics", {})
+                objective_components = row.get("objective_components", {})
+                constraint_metrics = row.get("constraint_metrics", {})
+                constraint_violations = row.get("constraint_violations", {})
+                for name in objective_component_names:
+                    output[f"objective_component_{name}"] = objective_components.get(name)
+                for name in constraint_metric_names:
+                    output[f"constraint_metric_{name}"] = constraint_metrics.get(name)
+                for name in constraint_violation_names:
+                    output[f"constraint_violation_{name}"] = constraint_violations.get(name)
                 for name in metric_names:
                     output[f"metric_{name}"] = metrics.get(name)
                 writer.writerow(output)

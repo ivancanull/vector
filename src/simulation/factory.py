@@ -1,21 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-try:
-    from ..worker.schemas import WorkerConfig
-    from ..worker.template_registry import ResolvedTemplate
-except ImportError:
-    from worker.schemas import WorkerConfig
-    from worker.template_registry import ResolvedTemplate
+from worker.schemas import WorkerConfig
+from worker.template_registry import ResolvedTemplate
 
 from .core import Simulator
-from .dataset_simulator import DatasetSimulator
-from .hfss_simulator import HfssExecutor, RealHfssSimulator
 from .result_store import SimulationResultStore
+
+if TYPE_CHECKING:
+    from .dataset_simulator import DatasetSimulator
+    from .hfss_simulator import HfssExecutor, RealHfssSimulator
 
 
 class SimulatorFactory:
@@ -30,6 +28,8 @@ class SimulatorFactory:
         match_rtol: float = 1e-9,
         dataset_path: str | Path | None = None,
     ) -> DatasetSimulator:
+        from .dataset_simulator import DatasetSimulator
+
         data_cfg = _get(config, "data")
         target_cfg = _get(config, "target")
         freqs_cfg = _get(data_cfg, "freqs")
@@ -60,6 +60,8 @@ class SimulatorFactory:
         executor: HfssExecutor | None = None,
         result_store: SimulationResultStore | None = None,
     ) -> RealHfssSimulator:
+        from .hfss_simulator import RealHfssSimulator
+
         return RealHfssSimulator(
             template_cfg=template_cfg,
             worker_cfg=worker_cfg,

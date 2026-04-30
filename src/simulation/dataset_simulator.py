@@ -6,13 +6,6 @@ from typing import Any
 
 import numpy as np
 
-try:
-    from ..complex_func import FunctionFromTouchstone
-    from ..loader import load_dataset
-except ImportError:
-    from src.complex_func import FunctionFromTouchstone
-    from src.loader import load_dataset
-
 from .core import SimulationError, SimulationInput, SimulationOutput, Simulator
 
 
@@ -70,6 +63,9 @@ class DatasetSimulator(Simulator):
             if not isinstance(payload, list):
                 raise ValueError(f"Unsupported dataset pickle payload: {self.dataset_path}")
             return payload
+
+        from complex_func import FunctionFromTouchstone
+        from loader import load_dataset
 
         parser = FunctionFromTouchstone(port_num=self.port_num)
         return load_dataset(

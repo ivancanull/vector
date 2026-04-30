@@ -104,5 +104,39 @@ class PeakFrequencyMetric(SParamMetric):
         return float(freqs[pos])
 
 
+@dataclass(frozen=True)
+class UnionBandMeanMetric(SParamMetric):
+    s_name: str
+    bands_hz: tuple[tuple[float, float], tuple[float, float]]
+
+    @property
+    def name(self) -> str:
+        b0, b1 = self.bands_hz
+        return f"{self.s_name.lower()}_mean_union_{_fmt_band(b0)}__{_fmt_band(b1)}"
+
+    def compute(self, response: SParameterResponse) -> float:
+        vals0 = response.band_values(self.s_name, self.bands_hz[0])
+        vals1 = response.band_values(self.s_name, self.bands_hz[1])
+        vals = np.concatenate([vals0, vals1], axis=0)
+        return float(np.mean(vals))
+
+
+@dataclass(frozen=True)
+class UnionBandMaxMetric(SParamMetric):
+    s_name: str
+    bands_hz: tuple[tuple[float, float], tuple[float, float]]
+
+    @property
+    def name(self) -> str:
+        b0, b1 = self.bands_hz
+        return f"{self.s_name.lower()}_max_union_{_fmt_band(b0)}__{_fmt_band(b1)}"
+
+    def compute(self, response: SParameterResponse) -> float:
+        vals0 = response.band_values(self.s_name, self.bands_hz[0])
+        vals1 = response.band_values(self.s_name, self.bands_hz[1])
+        vals = np.concatenate([vals0, vals1], axis=0)
+        return float(np.max(vals))
+
+
 def _fmt_band(band: tuple[float, float]) -> str:
     return f"{float(band[0]):.0f}_{float(band[1]):.0f}"

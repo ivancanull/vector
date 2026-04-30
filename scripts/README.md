@@ -109,7 +109,7 @@ Preview only (no deletion):
 
 Use `notebooks/bo_online_campaign.ipynb` for real-simulator BO campaigns with resume support.
 
-- Each execution runs only one seed.
+- Each execution runs all pending seeds (or only `FORCE_SEED` when set).
 - Completed seeds are tracked in `experiments/bo_online/campaign_summary.csv`.
 - Per-seed checkpoints are kept as `experiments/bo_online/bo_online_seed{seed}.checkpoint.json`.
 - Re-run the notebook later to continue remaining seeds automatically.

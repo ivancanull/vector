@@ -134,7 +134,7 @@ def test_server_queue_simulator_cache_hit_skips_enqueue(tmp_path: Path, monkeypa
 
 def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeypatch) -> None:
     queue_root = tmp_path / "queue"
-    for name in ("pending", "done", "failed", "results"):
+    for name in ("pending", "running", "done", "failed", "results"):
         (queue_root / name).mkdir(parents=True, exist_ok=True)
 
     store = _FakeStore(cached_path=None)
@@ -151,6 +151,7 @@ def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeyp
     )
     simulator.set_context(run_id="run_miss", iteration=0)
     job_id = "run_miss_it0000"
+    (queue_root / "running" / f"{job_id}.json").write_text("{}", encoding="utf-8")
     touchstone = queue_root / "results" / f"{job_id}.s2p"
     touchstone.write_text("dummy", encoding="utf-8")
     (queue_root / "done" / f"{job_id}.result.json").write_text(
@@ -176,6 +177,8 @@ def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeyp
     assert store.save_calls == 1
     # enqueue happened before done-read
     assert (queue_root / "pending" / f"{job_id}.json").exists()
+    assert not (queue_root / "running" / f"{job_id}.json").exists()
+    assert (queue_root / "archive" / "running" / f"{job_id}.json").exists()
 
 
 def test_server_queue_simulator_failed_and_timeout(tmp_path: Path, monkeypatch) -> None:

@@ -1,5 +1,7 @@
 # Development Log
 
+Paper-facing methods/experiments documentation lives under [docs/paper/README.md](paper/README.md). Keep this file focused on engineering implementation history.
+
 This document tracks implementation status, operational decisions, and near-term plans for the server-worker HFSS queue workflow.
 
 ## Current Decisions
@@ -50,12 +52,23 @@ This document tracks implementation status, operational decisions, and near-term
 - Added `simulation_interface.md` for the optimization-level real/fake simulator API.
 - Added this development log as the living implementation/planning tracker.
 
+### BO Campaign Progress Tracking
+
+- Updated `notebooks/bo_online_campaign.ipynb` to treat a seed as completed only when:
+  - `status == completed`, and
+  - `num_trials >= N_INIT + BUDGET`.
+- Updated campaign row write-back in the notebook to set `status` dynamically:
+  - `completed` when trial target is reached,
+  - `in_progress` otherwise.
+- This prevents partially run seeds from being filtered out as completed during next-seed selection.
+
 ## Known Issues and Watch Items
 
 - Old remote jobs may still contain stale setup/sweep values such as `SI` / `Sweep1`; prefer new jobs using template defaults or `Setup1` / `Sweep`.
 - The one-shot fetch-run-submit script is now a continuous worker by default; use `--once` when debugging a single job.
 - Remote `running/<job>.json` files should remain until the server confirms result ingestion and archives them.
 - Local queue may contain previous development results; use `cleanup_test_results.py --dry-run` before applying cleanup.
+- Existing rows in `experiments/bo_online/campaign_summary.csv` may still have stale `status=completed` from older notebook logic; rerun campaign progress/update cells to refresh statuses.
 
 ## Planned
 

@@ -1,4 +1,5 @@
 from .acquisition import AcquisitionFunction, EIAcquisition, UCBAcquisition
+from .candidate_space import CandidateSpace, ContinuousCandidateSpace, DiscreteCandidateSpace
 from .datasets import BCLFDataset, PassiveDataset
 from .objectives import (
     AtFrequencyMetric,
@@ -6,27 +7,43 @@ from .objectives import (
     BandMeanMetric,
     BandMinMetric,
     BandRippleMetric,
-    BCLFObjective,
     GreaterEqualConstraint,
-    MaxS11DbMetric,
     MaximizeMetric,
+    LowerBoundHingePenalty,
     Metric,
     MinimizeMetric,
-    MinS21DbMetric,
     Objective,
     ObjectiveFunction,
     ObjectiveResult,
     ObjectiveTerm,
-    PassbandMeanS21DbMetric,
     PeakFrequencyMetric,
     SParameterResponse,
     TargetMetric,
+    UpperBoundHingePenalty,
     LessEqualConstraint,
+    ghz_to_hz,
+    band_ghz_to_hz,
+)
+from .optimization_spec import (
+    BCLFOptimizationSpec,
+    OptimizationSpec,
+    SpecResults,
     build_bclf_objective,
+    build_bclf_optimization_spec,
 )
 from .recorder import ExperimentRecorder, RecorderOutput
-from .replay_optimizer import BaseOptimizer, OptimizationState, ReplayOptimizer, RunResult
-from .online_optimizer import OnlineBOOptimizer, OnlineOptimizationState, OnlineRunResult
+from .optimizer_base import (
+    OptimizerState,
+    OptimizerRunResult,
+    OptimizerBase,
+    SelectionResult,
+)
+from .optimizer_bo import (
+    BoTorchOptimizer,
+    OnlineBOOptimizer,
+    OptimizerBoTorch,
+)
+from .optimizer_random import OptimizerRandom
 from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
 from .surrogates import ANNSurrogate, BNNSurrogate, GPSurrogate, SurrogateModel
 from .types import EvaluationRecord
@@ -34,15 +51,17 @@ from .types import EvaluationRecord
 __all__ = [
     "AcquisitionFunction",
     "ANNSurrogate",
-    "BaseOptimizer",
     "BNNSurrogate",
-    "BCLFObjective",
     "BCLFDataset",
+    "BoTorchOptimizer",
     "BandMaxMetric",
     "BandMeanMetric",
     "BandMinMetric",
     "BandRippleMetric",
     "AtFrequencyMetric",
+    "CandidateSpace",
+    "ContinuousCandidateSpace",
+    "DiscreteCandidateSpace",
     "EIAcquisition",
     "EvaluationRecord",
     "ExperimentRecorder",
@@ -50,32 +69,38 @@ __all__ = [
     "GPSurrogate",
     "HfssSimulator",
     "LessEqualConstraint",
-    "MaxS11DbMetric",
     "MaximizeMetric",
+    "LowerBoundHingePenalty",
     "Metric",
     "MinimizeMetric",
-    "MinS21DbMetric",
     "Objective",
     "ObjectiveFunction",
     "ObjectiveResult",
+    "OptimizationSpec",
     "ObjectiveTerm",
     "OnlineBOOptimizer",
-    "OnlineOptimizationState",
-    "OnlineRunResult",
-    "PassbandMeanS21DbMetric",
+    "OptimizerState",
+    "OptimizerRunResult",
+    "OptimizerBase",
+    "OptimizerBoTorch",
+    "OptimizerRandom",
     "PeakFrequencyMetric",
     "SParameterResponse",
     "TargetMetric",
+    "UpperBoundHingePenalty",
+    "BCLFOptimizationSpec",
     "build_bclf_objective",
-    "OptimizationState",
+    "build_bclf_optimization_spec",
+    "ghz_to_hz",
+    "band_ghz_to_hz",
     "PassiveDataset",
     "RecorderOutput",
-    "ReplayOptimizer",
     "ReplaySimulator",
     "ServerQueueSimulator",
-    "RunResult",
+    "SelectionResult",
     "SimulationResult",
     "Simulator",
+    "SpecResults",
     "SurrogateModel",
     "UCBAcquisition",
 ]

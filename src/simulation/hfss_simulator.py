@@ -5,18 +5,10 @@ from typing import Protocol
 
 import numpy as np
 
-try:
-    from ..complex_func import FunctionFromTouchstone
-    from ..worker.hfss_api import HfssJobExecutor
-    from ..worker.schemas import JobRequest, JobResult, WorkerConfig
-    from ..worker.template_registry import ResolvedTemplate
-    from ..worker.utils import WorkerError, utc_now
-except ImportError:
-    from src.complex_func import FunctionFromTouchstone
-    from worker.hfss_api import HfssJobExecutor
-    from worker.schemas import JobRequest, JobResult, WorkerConfig
-    from worker.template_registry import ResolvedTemplate
-    from worker.utils import WorkerError, utc_now
+from worker.hfss_api import HfssJobExecutor
+from worker.schemas import JobRequest, JobResult, WorkerConfig
+from worker.template_registry import ResolvedTemplate
+from worker.utils import WorkerError, utc_now
 
 from .core import SimulationError, SimulationInput, SimulationOutput, Simulator
 from .result_store import SimulationResultStore
@@ -155,6 +147,8 @@ class RealHfssSimulator(Simulator):
         return path
 
     def _parse_touchstone(self, case_id: str, touchstone_path: Path) -> tuple[np.ndarray, np.ndarray]:
+        from complex_func import FunctionFromTouchstone
+
         parser = FunctionFromTouchstone(port_num=self.port_num)
         try:
             parser.parse(str(touchstone_path))

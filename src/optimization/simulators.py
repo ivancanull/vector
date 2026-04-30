@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 import time
 from typing import Any, Literal
 
@@ -13,11 +15,6 @@ from server.queue_manager import QueueManager
 
 from simulation.core import SimulationInput
 from simulation.result_store import SimulationResultStore
-
-try:
-    from ..complex_func import FunctionFromTouchstone
-except ImportError:
-    from src.complex_func import FunctionFromTouchstone
 
 from .datasets import PassiveDataset
 
@@ -32,8 +29,11 @@ class SimulationResult:
     status: SimulationStatus
     error: str | None = None
     metadata: dict[str, Any] | None = None
+    actual_geometry: np.ndarray | None = None
 
     def __post_init__(self) -> None:
+        if self.actual_geometry is not None:
+            object.__setattr__(self, "actual_geometry", np.asarray(self.actual_geometry, dtype=float).reshape(-1))
         if self.freqs is not None:
             object.__setattr__(self, "freqs", np.asarray(self.freqs, dtype=float))
         if self.s_params is not None:
@@ -80,6 +80,7 @@ class ReplaySimulator(Simulator):
             status="done",
             error=None,
             metadata={"dataset_index": idx, "case_id": self.dataset.get_case_id(idx)},
+            actual_geometry=self.dataset.get_geometry(idx),
         )
 
 
@@ -127,6 +128,7 @@ class HfssSimulator(Simulator):
             status="done",
             error=None,
             metadata={"case_id": getattr(output, "case_id", request.case_id), "artifacts": getattr(output, "artifacts", None)},
+            actual_geometry=request.geo_params(),
         )
 
 
@@ -194,6 +196,7 @@ class ServerQueueSimulator(Simulator):
         quantized_variables = self._quantize_variables(
             {name: float(values[i]) for i, name in enumerate(self.variable_order)}
         )
+        actual_geometry = np.array([quantized_variables[name] for name in self.variable_order], dtype=float)
 
         request = SimulationInput(
             case_id=case_id,
@@ -228,6 +231,7 @@ class ServerQueueSimulator(Simulator):
                     "touchstone_path": str(cached.touchstone_path),
                     "simulator_elapsed_sec": float(time.perf_counter() - start),
                 },
+                actual_geometry=actual_geometry,
             )
 
         job = self._build_job(case_id, request.variables)
@@ -310,6 +314,7 @@ class ServerQueueSimulator(Simulator):
                 "touchstone_path": str(saved.touchstone_path),
                 "simulator_elapsed_sec": float(time.perf_counter() - start),
             },
+            actual_geometry=actual_geometry,
         )
 
     def _quantize_variables(self, variables: dict[str, float]) -> dict[str, float]:
@@ -358,20 +363,24 @@ class ServerQueueSimulator(Simulator):
         start = time.perf_counter()
         while True:
             if done_path.exists():
+                archived_running = self._archive_running_job(case_id, queue_root)
                 return {
                     "status": "done",
                     "result_json_path": done_path,
                     "wait_seconds": float(time.perf_counter() - start),
                     "queue_root": queue_root,
+                    "archived_running_path": str(archived_running) if archived_running else None,
                 }
             if failed_path.exists():
                 payload = read_json(failed_path)
+                archived_running = self._archive_running_job(case_id, queue_root)
                 return {
                     "status": "failed",
                     "result_json_path": failed_path,
                     "wait_seconds": float(time.perf_counter() - start),
                     "queue_root": queue_root,
                     "error": payload.get("error_message", "simulation_failed"),
+                    "archived_running_path": str(archived_running) if archived_running else None,
                 }
             if (time.perf_counter() - start) >= self.job_timeout_sec:
                 return {
@@ -384,10 +393,26 @@ class ServerQueueSimulator(Simulator):
             time.sleep(self.poll_interval_sec)
 
     def _load_touchstone(self, touchstone_path: Any) -> tuple[np.ndarray, np.ndarray]:
+        from complex_func import FunctionFromTouchstone
+
         parser = FunctionFromTouchstone(port_num=self.port_num)
         parser.parse(str(touchstone_path))
         s_params = parser.evaluate_all()
         return np.asarray(parser.freq, dtype=float), np.asarray(s_params, dtype=complex)
+
+    @staticmethod
+    def _archive_running_job(case_id: str, queue_root: Path) -> Path | None:
+        running_path = queue_root / "running" / f"{case_id}.json"
+        if not running_path.exists():
+            return None
+        archive_dir = queue_root / "archive" / "running"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        target = archive_dir / running_path.name
+        if target.exists():
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+            target = archive_dir / f"{running_path.stem}.{ts}{running_path.suffix}"
+        running_path.replace(target)
+        return target
 
 
 @dataclass(frozen=True)
