@@ -1,0 +1,2 @@
+fit_seconds,objective_mae,objective_spearman,s11_db_mae,s21_db_mae,seed,test_size,top10_recall,train_size
+0.12611317599657923,29.768882948423123,-0.04945054945054945,8.631312865048919,22.967900020964475,0,27,0.3,3

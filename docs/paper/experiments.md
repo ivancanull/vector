@@ -26,6 +26,104 @@ Migration note:
 
 ---
 
+## Objective Update (2026-05-06): EXT-Informed Narrow Passband
+
+### New Objective Settings
+
+- passband: `4.8-5.2 GHz`
+- passband constraints: `S21 >= -5 dB`, `S11 <= -7 dB`
+- stopbands (online BO notebook): unchanged
+  - lower stopband: `3.6-4.8 GHz`
+  - upper stopband: `6.5-8.7 GHz`
+  - stopband constraint term: `max_stopband_s21_db=-15 dB` (as currently configured in notebook)
+
+### Experiment Steps (Notebook Workflow)
+
+1. Run `notebooks/fake_average_passband.ipynb`:
+   - load all `ext/` cases from `data/bandpass_coupled_line_filter_export/ext/index.json`
+   - evaluate new fixed-band objective on `4.8-5.2 GHz`
+   - plot all EXT curves and a separate block for satisfying-only curves
+   - print satisfying case count and filenames.
+2. Use satisfying-region evidence to set objective in online BO notebook.
+3. Run `notebooks/bo_online_experiment.ipynb` with updated `BCLFOptimizationSpec` passband settings.
+
+### Current Observation Under New Band
+
+- In EXT set (184 valid cases), strict full-band feasibility under the new objective is sparse but non-zero:
+  - satisfying cases: `2`
+- This matches the intended regime: narrow feasible region is acceptable.
+
+---
+
+## TR-BO A/B Update (2026-05-06)
+
+### Variant Definition
+
+- Baseline: existing `OptimizerBoTorch` global-discrete `qLogEI` selection.
+- TR-BO: single-region trust-region mode (TuRBO-1 style) in the same optimizer:
+  - local candidate filtering in normalized space (`L_inf` trust box),
+  - adaptive trust-region length expansion/shrink by success/failure streaks,
+  - fallback to global pool if trust-region slice is empty.
+
+### Fixed A/B Setup
+
+- Notebook: `notebooks/bo_online_experiment.ipynb`
+- Backend: queue-backed online simulator (`server`)
+- Seed/budget: `SEED=0`, `N_INIT=8`, `BUDGET=40`
+- Objective settings (same for both variants):
+  - passband `4.8-5.2 GHz`
+  - passband constraints `S21>=-5 dB`, `S11<=-7 dB`
+  - lower stopband `3.6-4.8 GHz`
+  - upper stopband `5.8-8.7 GHz`
+
+### Artifact Naming and Outputs
+
+- Run IDs:
+  - baseline: `bo_online_general_seed0_baseline`
+  - trust-region: `bo_online_general_seed0_trbo1`
+- Output family per variant:
+  - checkpoint: `experiments/bo_online_general/<run_id>.checkpoint.json`
+  - recorder outputs: `<run_id>.json` and `<run_id>.csv`
+- Notebook comparison outputs:
+  - objective-by-iteration overlay,
+  - best-so-far overlay,
+  - compact summary table (`final best`, `first feasible iter`, `cache_hit_ratio`, runtime totals).
+
+---
+
+## Offline BNN Surrogate Feasibility
+
+- experiment_id: `bclf_bnn_offline_surrogate_v1`
+- status: `promising-feasibility`
+- primary notebook: `notebooks/bnn_bclf_offline_feasibility.ipynb`
+- output root: `experiments/bnn_bclf_offline_feasibility/`
+
+### Research Question
+
+Can the legacy Bayesian neural network learn BCLF `S11`/`S21` responses from
+the cached Touchstone dataset well enough to serve as a response surrogate?
+
+### Current Setup
+
+- Dataset: `data/bandpass_coupled_line_filter_export/ext`
+- Split: 80% train, 20% test
+- Model: `modeling.LegacyBNNResponseSurrogate`
+- Target mode: direct dB prediction, `target_mode="db"`
+- Inputs: geometry variables plus frequency
+- Default training: 1000 epochs, batch size 1024, hidden dims `[256, 256, 256]`
+
+### Current Observation
+
+The dB-trained BNN surrogate reproduces the main response-curve structure in
+the current train comparison, including the `S11` notch and `S21` passband
+shape. This is a useful feasibility signal for surrogate modeling, but it is
+not yet an online optimization result.
+
+Full experiment details and artifact paths are documented in
+[BNN Surrogate Experiments](../bnn_surrogate_experiments.md).
+
+---
+
 ## Experiment Card: Online BO Seed Campaign
 
 - experiment_id: `bo_online_seed_campaign_v1`
@@ -216,3 +314,66 @@ Source of truth:
 ### Known Caveats
 
 - Ensure comparisons do not mix run families with different objective definitions unless explicitly labeled as such.
+
+---
+
+## Experiment Card: Fake Simulator Repeatability (One-vs-One)
+
+- experiment_id: `fake_sim_repeatability_bclf_v1`
+- status: `paper-candidate`
+- owner: `team`
+- last_updated_utc: `2026-05-06`
+
+### Research Question / Hypothesis
+
+- For the same BCLF geometry parameters, does the expected generated result in `ext/` reproduce the original exported response shape (`S11`, `S21`)?
+
+### Method Variant
+
+- One-vs-one comparison only:
+  - baseline file from `data/bandpass_coupled_line_filter_export/` (outside `ext`)
+  - expected parameter-matched file from `data/bandpass_coupled_line_filter_export/ext/`
+- Compare `S11` and `S21` in dB after parsing Touchstone format (`RI` / `MA` / `DB`).
+
+### Dataset / Simulator Source
+
+- Original export dataset:
+  - `data/bandpass_coupled_line_filter_export/*.s2p`
+- Generated/ext dataset:
+  - `data/bandpass_coupled_line_filter_export/ext/*.s2p`
+- Notebook driver:
+  - `notebooks/fake_simulator_repeatability_experiment.ipynb`
+
+### Config References
+
+- Primary notebook:
+  - `notebooks/fake_simulator_repeatability_experiment.ipynb`
+- BCLF queue template reference used by the same notebook flow:
+  - `bclf_template_v1`
+
+### Seed Policy and Seeds Used
+
+- Seed policy: not applicable (deterministic file-pair comparison).
+- Selection policy: first valid baseline case with required vars `L, L1, L2, W, W1, W2, S1, S2`; expected ext path is derived from those values.
+
+### Artifact Links
+
+- Notebook:
+  - `notebooks/fake_simulator_repeatability_experiment.ipynb`
+- Compared pair (example reported case):
+  - `data/bandpass_coupled_line_filter_export/Bandpass_Coupled_Line_Filter_export_Bandpass_Coupled_Line_Filter_L_7d7_L1_8d0_L2_7d8_W_0d9_W1_0d7_W2_0d9_S1_0d13_S2_0d55.s2p`
+  - `data/bandpass_coupled_line_filter_export/ext/Bandpass_Coupled_Line_Filter_export_Bandpass_Coupled_Line_Filter_L_7d7_L1_8d0_L2_7d8_W_0d9_W1_0d7_W2_0d9_S1_0d13_S2_0d55.s2p`
+- Summary note:
+  - `docs/fake_simulator_repeatability_summary.md`
+
+### Inclusion Rule for Paper Figures/Tables
+
+- Include only one-vs-one pairs where:
+  - required BCLF vars are parseable from baseline filename,
+  - expected `ext` file exists for the exact parameter-derived name,
+  - numeric row shapes match and frequency grids align.
+
+### Known Caveats
+
+- Matching parameter names does not guarantee bitwise-identical responses; observed differences are strongest around `S11` notch depth.
+- Header metadata differences (for example `Sweep` vs `Sweep1`, generation timestamp) are not used as inclusion/exclusion criteria.

@@ -64,7 +64,11 @@ class DatasetSimulator(Simulator):
                 raise ValueError(f"Unsupported dataset pickle payload: {self.dataset_path}")
             return payload
 
-        from complex_func import FunctionFromTouchstone
+        # Support both import styles used across scripts/notebooks.
+        try:
+            from src.complex_func import FunctionFromTouchstone
+        except ImportError:
+            from complex_func import FunctionFromTouchstone
         from loader import load_dataset
 
         parser = FunctionFromTouchstone(port_num=self.port_num)

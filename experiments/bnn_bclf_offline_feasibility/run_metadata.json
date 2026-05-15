@@ -1,0 +1,10 @@
+{
+  "seeds": [
+    0
+  ],
+  "train_sizes": [
+    3
+  ],
+  "n_init": 3,
+  "budget": 2
+}

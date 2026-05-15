@@ -72,6 +72,39 @@ def test_replay_simulator_hit_and_miss(tmp_path: Path) -> None:
     assert simulator.num_failures == 1
 
 
+def test_replay_simulator_repeat_same_vars_same_result(tmp_path: Path) -> None:
+    path = tmp_path / "dataset.pkl"
+    _write_payload(path)
+
+    dataset = PassiveDataset.from_pickle(
+        path,
+        variable_order=["Din", "S", "W"],
+        freqs=np.array([1.0, 2.0, 3.0]),
+    )
+    simulator = ReplaySimulator(dataset=dataset)
+
+    geometry = np.array([55.0, 1.5, 15.0], dtype=float)
+    first = simulator.simulate(geometry)
+    second = simulator.simulate(geometry)
+
+    assert first.status == "done"
+    assert second.status == "done"
+    assert first.freqs is not None and second.freqs is not None
+    assert first.s_params is not None and second.s_params is not None
+    assert first.metadata is not None and second.metadata is not None
+
+    # Re-running the same variable setting in the fake replay simulator
+    # should produce the same sampled response.
+    assert np.array_equal(first.freqs, second.freqs)
+    assert np.array_equal(first.s_params, second.s_params)
+    assert first.metadata["case_id"] == second.metadata["case_id"] == "c01"
+    assert first.metadata["dataset_index"] == second.metadata["dataset_index"] == 0
+
+    assert simulator.num_calls == 2
+    assert simulator.num_success == 2
+    assert simulator.num_failures == 0
+
+
 def test_hfss_simulator_adapter_success_and_failure() -> None:
     class FakeOutput:
         def __init__(self, case_id: str, geo: np.ndarray) -> None:

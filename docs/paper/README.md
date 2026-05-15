@@ -13,6 +13,7 @@ Principles:
 ## Navigation
 
 - Methods: [methods.md](methods.md)
+- Optimization experiment backbone: [../optimization_experiment_backbone.md](../optimization_experiment_backbone.md)
 - Experiment design and protocol: [experiments.md](experiments.md)
 - Claim-to-evidence map (figures/tables): [results_index.md](results_index.md)
 - Reproducibility policy: [reproducibility.md](reproducibility.md)

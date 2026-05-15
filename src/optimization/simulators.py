@@ -152,6 +152,7 @@ class ServerQueueSimulator(Simulator):
         job_timeout_sec: float = 7200.0,
         run_id: str = "bo_online",
         mm_resolution: float = 0.01,
+        verbose: bool = False,
     ) -> None:
         super().__init__()
         self.queue_root = str(queue_root)
@@ -168,6 +169,7 @@ class ServerQueueSimulator(Simulator):
         self.job_timeout_sec = float(job_timeout_sec)
         self.run_id = run_id
         self.mm_resolution = float(mm_resolution)
+        self.verbose = bool(verbose)
         if self.mm_resolution <= 0:
             raise ValueError("mm_resolution must be > 0")
 
@@ -183,8 +185,12 @@ class ServerQueueSimulator(Simulator):
         self.num_calls += 1
         start = time.perf_counter()
         values = np.asarray(geometry, dtype=float).reshape(-1)
+        self._log(f"simulate call={self.num_calls} run_id={self.run_id} geometry={values.tolist()}")
         if len(values) != len(self.variable_order):
             self.num_failures += 1
+            self._log(
+                f"failed: geometry dimension mismatch got={len(values)} expected={len(self.variable_order)}"
+            )
             return SimulationResult(
                 freqs=None,
                 s_params=None,
@@ -197,6 +203,9 @@ class ServerQueueSimulator(Simulator):
             {name: float(values[i]) for i, name in enumerate(self.variable_order)}
         )
         actual_geometry = np.array([quantized_variables[name] for name in self.variable_order], dtype=float)
+        self._log(
+            f"case_id={case_id} quantized_geometry={actual_geometry.tolist()} vars={quantized_variables}"
+        )
 
         request = SimulationInput(
             case_id=case_id,
@@ -206,6 +215,7 @@ class ServerQueueSimulator(Simulator):
 
         cached = self.result_store.lookup(request)
         if cached is not None:
+            self._log(f"cache hit: case_id={case_id} touchstone={cached.touchstone_path}")
             try:
                 freqs, s_params = self._load_touchstone(cached.touchstone_path)
             except Exception as exc:
@@ -218,6 +228,9 @@ class ServerQueueSimulator(Simulator):
                     metadata={"cache_hit": True, "case_id": case_id},
                 )
             self.num_success += 1
+            self._log(
+                f"cache done: case_id={case_id} elapsed={float(time.perf_counter() - start):.3f}s"
+            )
             return SimulationResult(
                 freqs=freqs,
                 s_params=s_params,
@@ -235,10 +248,22 @@ class ServerQueueSimulator(Simulator):
             )
 
         job = self._build_job(case_id, request.variables)
+        self._log(
+            f"enqueue: job_id={job.job_id} template={job.template_name} output={job.output_filename} "
+            f"queue_root={self.queue_root}"
+        )
         self.queue.enqueue(job)
         wait_res = self._wait_job_result(case_id)
+        self._log(
+            f"wait result: case_id={case_id} status={wait_res.get('status')} "
+            f"wait={float(wait_res.get('wait_seconds', 0.0)):.3f}s "
+            f"result_json={wait_res.get('result_json_path')}"
+        )
         if wait_res["status"] != "done":
             self.num_failures += 1
+            self._log(
+                f"failed: case_id={case_id} error={wait_res.get('error', 'simulation_failed')}"
+            )
             return SimulationResult(
                 freqs=None,
                 s_params=None,
@@ -260,6 +285,7 @@ class ServerQueueSimulator(Simulator):
         artifact_touchstone = payload.get("artifacts", {}).get("touchstone")
         if not isinstance(artifact_touchstone, str) or not artifact_touchstone:
             self.num_failures += 1
+            self._log(f"failed: case_id={case_id} missing touchstone artifact in result payload")
             return SimulationResult(
                 freqs=None,
                 s_params=None,
@@ -284,6 +310,7 @@ class ServerQueueSimulator(Simulator):
             freqs, s_params = self._load_touchstone(saved.touchstone_path)
         except Exception as exc:
             self.num_failures += 1
+            self._log(f"failed: case_id={case_id} parse/save touchstone error={exc}")
             return SimulationResult(
                 freqs=None,
                 s_params=None,
@@ -301,6 +328,10 @@ class ServerQueueSimulator(Simulator):
             )
 
         self.num_success += 1
+        self._log(
+            f"done: case_id={case_id} touchstone={saved.touchstone_path} "
+            f"elapsed={float(time.perf_counter() - start):.3f}s"
+        )
         return SimulationResult(
             freqs=freqs,
             s_params=s_params,
@@ -337,6 +368,10 @@ class ServerQueueSimulator(Simulator):
         case_id = f"{self.run_id}_it{self._next_case_id:04d}"
         self._next_case_id += 1
         return case_id
+
+    def _log(self, message: str) -> None:
+        if self.verbose:
+            print(f"[ServerQueueSimulator] {message}")
 
     def _build_job(self, case_id: str, variables: dict[str, float]) -> SimulationJob:
         formatted: dict[str, str] = {}
@@ -393,7 +428,11 @@ class ServerQueueSimulator(Simulator):
             time.sleep(self.poll_interval_sec)
 
     def _load_touchstone(self, touchstone_path: Any) -> tuple[np.ndarray, np.ndarray]:
-        from complex_func import FunctionFromTouchstone
+        # Support both import styles used across scripts/notebooks.
+        try:
+            from src.complex_func import FunctionFromTouchstone
+        except ImportError:
+            from complex_func import FunctionFromTouchstone
 
         parser = FunctionFromTouchstone(port_num=self.port_num)
         parser.parse(str(touchstone_path))

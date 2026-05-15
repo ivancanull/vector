@@ -216,3 +216,101 @@ def test_online_optimizer_checkpoint_resume(tmp_path: Path) -> None:
     assert len(resumed.history) == len(first.history)
     assert resumed.state.best_objective == first.state.best_objective
     assert [row["geometry"] for row in resumed.history] == [row["geometry"] for row in first.history]
+
+
+def test_trust_region_filters_candidates_in_deterministic_path(tmp_path: Path) -> None:
+    # Ordered points so deterministic fallback picks first candidate in filtered subset.
+    pool = np.asarray([[0.0], [0.3], [0.7], [1.0]], dtype=float)
+    space = DiscreteCandidateSpace(variable_order=["x"], candidate_geometries=pool)
+    opt = OptimizerBoTorch(
+        candidate_space=space,
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0]), step=0.1),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records"),
+        budget=1,
+        n_init=0,
+        seed=0,
+        run_id="tr_filter",
+        checkpoint_path=tmp_path / "tr_filter.checkpoint.json",
+        use_trust_region=True,
+        tr_length_init=0.2,
+    )
+    # Force model-not-ready path and explicit center.
+    opt._model_ready = False
+    opt._tr_center_norm = np.asarray([0.65], dtype=float)
+    sel = opt._select_next(space.remaining())
+    # in normalized [0,1], 0.7 is inside; 0.3 is outside for length=0.2
+    assert np.allclose(sel.requested_geometry, np.asarray([0.7]))
+    assert sel.selection_debug is not None
+    assert sel.selection_debug.get("tr_filter_applied") is True
+    assert int(sel.selection_debug.get("tr_candidates_in_region")) >= 1
+
+
+def test_trust_region_state_roundtrip_and_backward_compat(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "tr_state.checkpoint.json"
+    kwargs = dict(
+        candidate_space=ContinuousCandidateSpace(
+            variable_order=["x"],
+            variable_bounds={"x": (0.0, 2.0)},
+            pool_size=12,
+            seed=5,
+        ),
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0, 2.0]), step=0.5),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records"),
+        budget=2,
+        n_init=1,
+        seed=5,
+        run_id="tr_state",
+        checkpoint_path=checkpoint,
+        use_trust_region=True,
+    )
+    first = OptimizerBoTorch(**kwargs).run()
+    payload = checkpoint.read_text(encoding="utf-8")
+    assert '"trust_region"' in payload
+
+    resumed = OptimizerBoTorch(
+        candidate_space=ContinuousCandidateSpace(
+            variable_order=["x"],
+            variable_bounds={"x": (0.0, 2.0)},
+            pool_size=12,
+            seed=5,
+        ),
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0, 2.0]), step=0.5),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_resumed"),
+        budget=2,
+        n_init=1,
+        seed=5,
+        run_id="tr_state",
+        checkpoint_path=checkpoint,
+        resume=True,
+        use_trust_region=True,
+    ).run()
+    assert len(first.history) == len(resumed.history)
+
+    # Backward-compat simulation: remove trust_region section and ensure resume does not crash.
+    import json
+
+    old_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    old_payload.pop("trust_region", None)
+    checkpoint.write_text(json.dumps(old_payload, indent=2, ensure_ascii=True), encoding="utf-8")
+    compat = OptimizerBoTorch(
+        candidate_space=ContinuousCandidateSpace(
+            variable_order=["x"],
+            variable_bounds={"x": (0.0, 2.0)},
+            pool_size=12,
+            seed=5,
+        ),
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0, 2.0]), step=0.5),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_compat"),
+        budget=2,
+        n_init=1,
+        seed=5,
+        run_id="tr_state",
+        checkpoint_path=checkpoint,
+        resume=True,
+        use_trust_region=True,
+    )
+    assert compat.use_trust_region is True

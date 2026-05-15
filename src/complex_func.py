@@ -1,7 +1,14 @@
 from abc import ABC, abstractmethod
 from typing import Sequence
-from .utils import frequency_to_s, locate_freqs_idx, s_to_frequency
-from .touchstone import TouchstoneParser
+# Support both package import styles:
+# - `from src.complex_func import ...` (project root on sys.path)
+# - `from complex_func import ...` (src/ on sys.path, common in notebooks)
+try:
+    from .utils import frequency_to_s, locate_freqs_idx, s_to_frequency
+    from .touchstone import TouchstoneParser
+except ImportError:  # pragma: no cover - exercised in notebook/runtime environments
+    from utils import frequency_to_s, locate_freqs_idx, s_to_frequency
+    from touchstone import TouchstoneParser
 import numpy as np
 from typing import Tuple, List
 __all__ = ["FunctionFromNumpy", "ComplexFunction", "FunctionFromTouchstone"]

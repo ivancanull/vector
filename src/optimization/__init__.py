@@ -43,6 +43,7 @@ from .optimizer_bo import (
     OnlineBOOptimizer,
     OptimizerBoTorch,
 )
+from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
 from .optimizer_random import OptimizerRandom
 from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
 from .surrogates import ANNSurrogate, BNNSurrogate, GPSurrogate, SurrogateModel
@@ -82,8 +83,10 @@ __all__ = [
     "OptimizerState",
     "OptimizerRunResult",
     "OptimizerBase",
+    "OptimizerANN",
     "OptimizerBoTorch",
     "OptimizerRandom",
+    "OnlineANNOptimizer",
     "PeakFrequencyMetric",
     "SParameterResponse",
     "TargetMetric",

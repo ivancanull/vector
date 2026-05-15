@@ -32,12 +32,18 @@ High-level BO loop:
 4. Evaluate candidate (queue-backed simulator or replay simulator).
 5. Record trial history and update best-so-far objective.
 
-### M2: Future Method Slot
+### M2: BNN Response Surrogate (offline feasibility)
 
-- Method name: `TBD`
-- Core idea: `TBD`
-- Why it differs from M1: `TBD`
-- Expected advantage/risk: `TBD`
+- Method name: legacy BNN response surrogate.
+- Core idea: train a Bayesian neural network on cached BCLF responses using
+  geometry plus frequency as input, and predict `S11`/`S21` directly in dB.
+- Why it differs from M1: this is a response surrogate, not a GP scalar
+  objective surrogate or acquisition optimizer.
+- Expected advantage/risk: it can learn full response curves for cheap offline
+  screening, but it must be validated on held-out responses before being used
+  for candidate ranking or online optimization.
+- Experiment reference:
+  - [BNN Surrogate Experiments](../bnn_surrogate_experiments.md)
 
 ### M3: Future Method Slot
 
@@ -66,6 +72,12 @@ Use these hooks when adding non-BO methods:
 - Shared objective definition across compared methods (or explicitly documented differences).
 - Shared seed policy and reporting protocol.
 - Shared artifact contract (`json/csv` summary + per-run history links).
+
+Implementation-level guidance for adding new optimizers is maintained in
+[Optimization Experiment Backbone](../optimization_experiment_backbone.md).
+
+The TuRBO-specific BCLF target and parameter bounds are documented in
+[BCLF TuRBO Optimization Target](../bclf_turbo_optimization_target.md).
 
 ## Current Objective Spec Reference (BO Online, BCLF)
 
