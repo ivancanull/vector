@@ -46,6 +46,19 @@ from .optimizer_bo import (
     OnlineBOOptimizer,
     OptimizerBoTorch,
 )
+from .bnn_acquisition import (
+    BNNExpectedImprovementAcquisition,
+    BNNExpectedImprovementBackend,
+    ScalarBNNConfig,
+    ScalarBNNRegressor,
+)
+from .botorch_acquisition import (
+    AcquisitionFitResult,
+    BoTorchAcquisitionBackend,
+    GPExpectedImprovementBackend,
+    GPqExpectedImprovementBackend,
+    GPqLogEIAcquisitionBackend,
+)
 from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
 from .optimizer_random import OptimizerRandom
 from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
@@ -58,6 +71,10 @@ __all__ = [
     "BNNSurrogate",
     "BCLFDataset",
     "BoTorchOptimizer",
+    "AcquisitionFitResult",
+    "BoTorchAcquisitionBackend",
+    "BNNExpectedImprovementAcquisition",
+    "BNNExpectedImprovementBackend",
     "BandMaxMetric",
     "BandMeanMetric",
     "BandMinMetric",
@@ -71,6 +88,9 @@ __all__ = [
     "ExperimentRecorder",
     "GreaterEqualConstraint",
     "GPSurrogate",
+    "GPExpectedImprovementBackend",
+    "GPqExpectedImprovementBackend",
+    "GPqLogEIAcquisitionBackend",
     "HfssSimulator",
     "LessEqualConstraint",
     "MaximizeMetric",
@@ -107,6 +127,8 @@ __all__ = [
     "ReplaySimulator",
     "ServerQueueSimulator",
     "SelectionResult",
+    "ScalarBNNConfig",
+    "ScalarBNNRegressor",
     "SimulationResult",
     "Simulator",
     "SpecResults",

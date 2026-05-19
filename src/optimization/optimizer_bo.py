@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from .botorch_acquisition import BoTorchAcquisitionBackend, GPqLogEIAcquisitionBackend
 from .optimizer_base import OptimizerBase, SelectionResult
 
 
@@ -16,6 +17,7 @@ class OptimizerBoTorch(OptimizerBase):
     def __init__(
         self,
         *,
+        acquisition_backend: BoTorchAcquisitionBackend | None = None,
         retrain_every: int = 1,
         use_trust_region: bool = False,
         tr_length_init: float = 0.25,
@@ -40,6 +42,7 @@ class OptimizerBoTorch(OptimizerBase):
             raise ValueError("tr_expand_factor must be > 1.0")
         if not (0.0 < tr_shrink_factor < 1.0):
             raise ValueError("tr_shrink_factor must be in (0, 1)")
+        self.acquisition_backend = acquisition_backend or GPqLogEIAcquisitionBackend()
         self.retrain_every = int(retrain_every)
         self.use_trust_region = bool(use_trust_region)
         self.tr_length_init = float(tr_length_init)
@@ -50,10 +53,6 @@ class OptimizerBoTorch(OptimizerBase):
         self.tr_expand_factor = float(tr_expand_factor)
         self.tr_shrink_factor = float(tr_shrink_factor)
         self.tr_improvement_epsilon = float(tr_improvement_epsilon)
-        self._torch = None
-        self._device = None
-        self._dtype = None
-        self._model = None
         self._model_ready = False
         self._last_fit_error: str | None = None
         self._tr_center_norm: np.ndarray | None = None
@@ -82,40 +81,11 @@ class OptimizerBoTorch(OptimizerBase):
             self._last_fit_error = None
             return
 
-        try:
-            from botorch.fit import fit_gpytorch_mll
-            from botorch.models import SingleTaskGP
-            from botorch.models.transforms import Standardize
-            from gpytorch.mlls import ExactMarginalLogLikelihood
-            import torch
-        except ImportError as exc:
-            self._model_ready = False
-            self._last_fit_error = f"ImportError: {exc}"
-            return
-
-        self._torch = torch
-        self._device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        self._dtype = torch.double
-        torch.manual_seed(0 if self.seed is None else int(self.seed))
-        if self._device.type == "cuda":
-            torch.cuda.manual_seed_all(0 if self.seed is None else int(self.seed))
-
         X_np = np.asarray([row["geometry_normalized"] for row in valid_trials], dtype=float)
         y_np = np.asarray([self._extract_scalar_objective(row) for row in valid_trials], dtype=float).reshape(-1, 1)
-
-        try:
-            X = torch.tensor(X_np, dtype=self._dtype, device=self._device)
-            y = torch.tensor(y_np, dtype=self._dtype, device=self._device)
-            model = SingleTaskGP(X, y, outcome_transform=Standardize(m=1))
-            mll = ExactMarginalLogLikelihood(model.likelihood, model)
-            fit_gpytorch_mll(mll)
-            self._model = model
-            self._model_ready = True
-            self._last_fit_error = None
-        except (RuntimeError, ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
-            self._model = None
-            self._model_ready = False
-            self._last_fit_error = f"{type(exc).__name__}: {exc}"
+        result = self.acquisition_backend.fit(X_np, y_np, seed=self.seed)
+        self._model_ready = bool(result.ready)
+        self._last_fit_error = result.error
 
     def _select_next(self, candidates_actual: np.ndarray) -> SelectionResult:
         candidates_actual = np.asarray(candidates_actual, dtype=float)
@@ -136,62 +106,11 @@ class OptimizerBoTorch(OptimizerBase):
             )
 
         try:
-            from botorch.acquisition.logei import qLogExpectedImprovement
-            from botorch.acquisition.objective import GenericMCObjective
-            from botorch.optim import optimize_acqf_discrete
-            from botorch.sampling.normal import SobolQMCNormalSampler
-        except ImportError as exc:
-            return self._deterministic_selection(
-                candidates_actual,
-                {
-                    "mode": "deterministic_import_error",
-                    "model_fit_status": "failed",
-                    "select_error": f"ImportError: {exc}",
-                    "fallback_policy": "first_remaining_candidate",
-                    **tr_debug,
-                },
-            )
-
-        try:
-            assert self._torch is not None and self._device is not None and self._dtype is not None
-            assert self._model is not None
-            Xcand_np = self.candidate_space.normalize(candidates_actual)
-            Xcand = self._torch.tensor(Xcand_np, dtype=self._dtype, device=self._device)
-            objective = GenericMCObjective(lambda Z, X=None: -Z[..., 0])
-            best_f = float(-min(float(row["objective"]) for row in self._history if np.isfinite(float(row["objective"]))))
-            sampler = SobolQMCNormalSampler(sample_shape=self._torch.Size([128]), seed=0 if self.seed is None else int(self.seed))
-            acq = qLogExpectedImprovement(
-                model=self._model,
-                best_f=best_f,
-                sampler=sampler,
-                objective=objective,
-            )
-            selected_t, values = optimize_acqf_discrete(acq_function=acq, q=1, choices=Xcand)
-            scores = acq(Xcand.unsqueeze(1)).detach().cpu().numpy().reshape(-1)
-            selected_norm = selected_t[0].detach()
-            dists = ((Xcand - selected_norm) ** 2).sum(dim=-1)
-            pos = int(dists.argmin().item())
-            posterior = self._model.posterior(Xcand[pos].reshape(1, -1))
-            mean = float(posterior.mean.detach().cpu().numpy().reshape(-1)[0])
-            var = float(posterior.variance.detach().cpu().numpy().reshape(-1)[0])
-            return SelectionResult(
-                requested_geometry=np.asarray(candidates_actual[pos], dtype=float),
-                predicted_mean=mean,
-                predicted_uncertainty=float(np.sqrt(max(var, 0.0))),
-                acquisition_score=float(scores[pos]),
-                selection_debug={
-                    "mode": "qlogei_discrete",
-                    "model_fit_status": "ok",
-                    "selected_pos": pos,
-                    "best_score": float(values.detach().cpu().numpy().reshape(-1)[0]),
-                    "candidate_pool_size": int(len(candidates_actual)),
-                    **tr_debug,
-                    "kernel_runtime": {
-                        "device": str(self._device),
-                        "dtype": "torch.double",
-                        "x_is_normalized": True,
-                    },
-                },
+            return self.acquisition_backend.select(
+                candidates_actual=candidates_actual,
+                candidates_normalized=self.candidate_space.normalize(candidates_actual),
+                history=self._history,
+                tr_debug=tr_debug,
             )
         except (RuntimeError, ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
             return self._deterministic_selection(
