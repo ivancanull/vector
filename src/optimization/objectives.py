@@ -13,6 +13,8 @@ from .metrics import (
     BandMinMetric,
     BandRippleMetric,
     PeakFrequencyMetric,
+    ResponseShapeEnvelopeMetric,
+    ResponseShapeEnvelopeSegment,
     SParamMetric,
 )
 from .sparam_response import SParameterResponse
@@ -267,6 +269,8 @@ __all__ = [
     "ObjectiveResult",
     "ObjectiveTerm",
     "PeakFrequencyMetric",
+    "ResponseShapeEnvelopeMetric",
+    "ResponseShapeEnvelopeSegment",
     "SParamMetric",
     "SParameterResponse",
     "TargetMetric",

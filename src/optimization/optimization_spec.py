@@ -6,7 +6,15 @@ from typing import Any
 import numpy as np
 
 from .constraints import Constraint
-from .metrics import BandMaxMetric, BandMeanMetric, BandMinMetric, UnionBandMaxMetric, UnionBandMeanMetric
+from .metrics import (
+    BandMaxMetric,
+    BandMeanMetric,
+    BandMinMetric,
+    ResponseShapeEnvelopeMetric,
+    ResponseShapeEnvelopeSegment,
+    UnionBandMaxMetric,
+    UnionBandMeanMetric,
+)
 from .objectives import (
     LowerBoundHingePenalty,
     MaximizeMetric,
@@ -169,6 +177,125 @@ class BCLFOptimizationSpec(OptimizationSpec):
         object.__setattr__(self, "objective_terms", objective_terms)
         object.__setattr__(self, "constraints", [])
         object.__setattr__(self, "frequency_bands_ghz", frequency_bands_ghz)
+
+
+class BCLFResponseShapeOptimizationSpec(OptimizationSpec):
+    """BCLF spec that penalizes pointwise response-shape envelope violations."""
+
+    def __init__(
+        self,
+        *,
+        passband_ghz: tuple[float, float] = (5.2, 5.9),
+        lower_stopband_ghz: tuple[float, float] = (3.6, 4.8),
+        upper_stopband_ghz: tuple[float, float] = (6.5, 8.7),
+        min_passband_s21_db: float = -7.0,
+        max_passband_s11_db: float = -7.0,
+        max_stopband_s21_db: float = -18.0,
+        s21_weight: float = 1.0,
+        s11_weight: float = 0.5,
+    ) -> None:
+        passband_hz = band_ghz_to_hz(passband_ghz)
+        lower_stopband_hz = band_ghz_to_hz(lower_stopband_ghz)
+        upper_stopband_hz = band_ghz_to_hz(upper_stopband_ghz)
+
+        s21_metric = ResponseShapeEnvelopeMetric(
+            "S21",
+            tuple(
+                _bclf_s21_response_shape_segments(
+                    passband_hz=passband_hz,
+                    lower_stopband_hz=lower_stopband_hz,
+                    upper_stopband_hz=upper_stopband_hz,
+                    min_passband_s21_db=float(min_passband_s21_db),
+                    max_stopband_s21_db=float(max_stopband_s21_db),
+                )
+            ),
+            label="fullband_shape",
+        )
+        s11_metric = ResponseShapeEnvelopeMetric(
+            "S11",
+            (
+                ResponseShapeEnvelopeSegment(
+                    passband_hz,
+                    upper_start_db=float(max_passband_s11_db),
+                    upper_end_db=float(max_passband_s11_db),
+                ),
+            ),
+            label="passband_shape",
+        )
+
+        objective_terms = [
+            MinimizeMetric(
+                name="shape_s21_fullband_violation",
+                metric=s21_metric,
+                weight=float(s21_weight),
+            ),
+            MinimizeMetric(
+                name="shape_s11_passband_violation",
+                metric=s11_metric,
+                weight=float(s11_weight),
+            ),
+        ]
+        frequency_bands_ghz = {
+            "passband": passband_ghz,
+            "lower_stopband": lower_stopband_ghz,
+            "upper_stopband": upper_stopband_ghz,
+        }
+        object.__setattr__(self, "objective_terms", objective_terms)
+        object.__setattr__(self, "constraints", [])
+        object.__setattr__(self, "frequency_bands_ghz", frequency_bands_ghz)
+
+
+def _bclf_s21_response_shape_segments(
+    *,
+    passband_hz: tuple[float, float],
+    lower_stopband_hz: tuple[float, float],
+    upper_stopband_hz: tuple[float, float],
+    min_passband_s21_db: float,
+    max_stopband_s21_db: float,
+) -> list[ResponseShapeEnvelopeSegment]:
+    lower_stop_lo, lower_stop_hi = lower_stopband_hz
+    pass_lo, pass_hi = passband_hz
+    upper_stop_lo, upper_stop_hi = upper_stopband_hz
+    if not (lower_stop_lo < lower_stop_hi <= pass_lo < pass_hi <= upper_stop_lo < upper_stop_hi):
+        raise ValueError(
+            "BCLF response-shape bands must be ordered as lower_stopband <= passband <= upper_stopband"
+        )
+
+    segments = [
+        ResponseShapeEnvelopeSegment(
+            lower_stopband_hz,
+            upper_start_db=max_stopband_s21_db,
+            upper_end_db=max_stopband_s21_db,
+        ),
+        ResponseShapeEnvelopeSegment(
+            passband_hz,
+            lower_start_db=min_passband_s21_db,
+            lower_end_db=min_passband_s21_db,
+        ),
+        ResponseShapeEnvelopeSegment(
+            upper_stopband_hz,
+            upper_start_db=max_stopband_s21_db,
+            upper_end_db=max_stopband_s21_db,
+        ),
+    ]
+
+    if lower_stop_hi < pass_lo:
+        segments.append(
+            ResponseShapeEnvelopeSegment(
+                (lower_stop_hi, pass_lo),
+                lower_start_db=max_stopband_s21_db,
+                lower_end_db=min_passband_s21_db,
+            )
+        )
+    if pass_hi < upper_stop_lo:
+        segments.append(
+            ResponseShapeEnvelopeSegment(
+                (pass_hi, upper_stop_lo),
+                upper_start_db=min_passband_s21_db,
+                upper_end_db=max_stopband_s21_db,
+            )
+        )
+    return segments
 
 
 def build_bclf_optimization_spec(**kwargs) -> OptimizationSpec:

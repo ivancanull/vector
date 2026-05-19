@@ -4,7 +4,14 @@ import numpy as np
 import pytest
 
 from optimization.constraints import GreaterEqualConstraint, LessEqualConstraint
-from optimization.metrics import AtFrequencyMetric, BandMaxMetric, BandMeanMetric, BandMinMetric, PeakFrequencyMetric
+from optimization.metrics import (
+    AtFrequencyMetric,
+    BandMaxMetric,
+    BandMeanMetric,
+    BandMinMetric,
+    PeakFrequencyMetric,
+    ResponseShapeEnvelopeMetric,
+)
 from optimization.objectives import (
     LowerBoundHingePenalty,
     MaximizeMetric,
@@ -16,7 +23,12 @@ from optimization.objectives import (
     band_ghz_to_hz,
     ghz_to_hz,
 )
-from optimization.optimization_spec import BCLFOptimizationSpec, build_bclf_objective, build_bclf_optimization_spec
+from optimization.optimization_spec import (
+    BCLFOptimizationSpec,
+    BCLFResponseShapeOptimizationSpec,
+    build_bclf_objective,
+    build_bclf_optimization_spec,
+)
 from optimization.sparam_response import SParameterResponse
 
 
@@ -171,6 +183,118 @@ def test_bclf_compatibility_wrappers() -> None:
     assert isinstance(spec, BCLFOptimizationSpec)
     obj = build_bclf_objective()
     assert isinstance(obj, Objective)
+
+
+def test_bclf_response_shape_satisfied_objective_is_zero() -> None:
+    freqs = np.array([3.5e9, 4.5e9, 5.5e9, 6.5e9, 7.5e9])
+    s11 = np.array([5.0, 5.0, -10.0, 5.0, 5.0])
+    s21 = np.array([-25.0, -10.0, -4.0, -15.0, -25.0])
+    f, s = _from_db(freqs, s11, s21)
+
+    spec = BCLFResponseShapeOptimizationSpec(
+        passband_ghz=(5.0, 6.0),
+        lower_stopband_ghz=(3.0, 4.0),
+        upper_stopband_ghz=(7.0, 8.0),
+        min_passband_s21_db=-5.0,
+        max_passband_s11_db=-7.0,
+        max_stopband_s21_db=-20.0,
+    )
+
+    out = spec.evaluate(f, s)
+
+    assert out.scalar_objective() == pytest.approx(0.0, abs=1e-6)
+    assert out.objective_components["shape_s21_fullband_violation"] == pytest.approx(0.0, abs=1e-6)
+    assert out.objective_components["shape_s11_passband_violation"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_bclf_response_shape_penalizes_s21_passband_violation() -> None:
+    freqs = np.array([3.5e9, 5.5e9, 7.5e9])
+    s11 = np.array([5.0, -10.0, 5.0])
+    s21 = np.array([-25.0, -8.0, -25.0])
+    f, s = _from_db(freqs, s11, s21)
+
+    spec = BCLFResponseShapeOptimizationSpec(
+        passband_ghz=(5.0, 6.0),
+        lower_stopband_ghz=(3.0, 4.0),
+        upper_stopband_ghz=(7.0, 8.0),
+        min_passband_s21_db=-5.0,
+        max_stopband_s21_db=-20.0,
+    )
+
+    out = spec.evaluate(f, s)
+
+    assert out.objective_components["shape_s21_fullband_violation"] == pytest.approx(3.0, abs=1e-6)
+    assert out.scalar_objective() == pytest.approx(3.0, abs=1e-6)
+
+
+def test_bclf_response_shape_penalizes_s21_stopband_violation() -> None:
+    freqs = np.array([3.5e9, 5.5e9, 7.5e9])
+    s11 = np.array([5.0, -10.0, 5.0])
+    s21 = np.array([-18.0, -4.0, -25.0])
+    f, s = _from_db(freqs, s11, s21)
+
+    spec = BCLFResponseShapeOptimizationSpec(
+        passband_ghz=(5.0, 6.0),
+        lower_stopband_ghz=(3.0, 4.0),
+        upper_stopband_ghz=(7.0, 8.0),
+        min_passband_s21_db=-5.0,
+        max_stopband_s21_db=-20.0,
+    )
+
+    out = spec.evaluate(f, s)
+
+    assert out.objective_components["shape_s21_fullband_violation"] == pytest.approx(4.0 / 3.0, abs=1e-6)
+    assert out.scalar_objective() == pytest.approx(4.0 / 3.0, abs=1e-6)
+
+
+def test_bclf_response_shape_linearly_interpolates_transition_target() -> None:
+    freqs = np.array([4.5e9, 5.5e9])
+    s11 = np.array([5.0, -10.0])
+    s21 = np.array([-14.0, -4.0])
+    f, s = _from_db(freqs, s11, s21)
+
+    spec = BCLFResponseShapeOptimizationSpec(
+        passband_ghz=(5.0, 6.0),
+        lower_stopband_ghz=(3.0, 4.0),
+        upper_stopband_ghz=(7.0, 8.0),
+        min_passband_s21_db=-5.0,
+        max_stopband_s21_db=-20.0,
+    )
+
+    out = spec.evaluate(f, s)
+
+    # At 4.5 GHz the lower transition target is -12.5 dB.
+    assert out.objective_components["shape_s21_fullband_violation"] == pytest.approx(1.125, abs=1e-6)
+    assert out.scalar_objective() == pytest.approx(1.125, abs=1e-6)
+
+
+def test_bclf_response_shape_ignores_s11_stopband_by_default() -> None:
+    freqs = np.array([3.5e9, 5.5e9, 7.5e9])
+    s11 = np.array([20.0, -10.0, 20.0])
+    s21 = np.array([-25.0, -4.0, -25.0])
+    f, s = _from_db(freqs, s11, s21)
+
+    spec = BCLFResponseShapeOptimizationSpec(
+        passband_ghz=(5.0, 6.0),
+        lower_stopband_ghz=(3.0, 4.0),
+        upper_stopband_ghz=(7.0, 8.0),
+        min_passband_s21_db=-5.0,
+        max_passband_s11_db=-7.0,
+        max_stopband_s21_db=-20.0,
+    )
+
+    out = spec.evaluate(f, s)
+
+    assert out.objective_components["shape_s11_passband_violation"] == pytest.approx(0.0, abs=1e-6)
+    assert out.scalar_objective() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_response_shape_exports_from_package() -> None:
+    from optimization import BCLFResponseShapeOptimizationSpec as ExportedSpec
+    from optimization import ResponseShapeEnvelopeMetric as ExportedMetric
+
+    assert ExportedSpec is BCLFResponseShapeOptimizationSpec
+    assert ExportedMetric is ResponseShapeEnvelopeMetric
 
 
 def test_unit_helpers() -> None:
