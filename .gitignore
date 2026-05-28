@@ -204,3 +204,7 @@ experiments/
 
 # legacy scripts
 scripts/legacy/
+
+# local ARIS/Codex project install
+.agents/
+AGENTS.md
