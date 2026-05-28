@@ -49,6 +49,19 @@ class LookupSimulator(Simulator):
         )
 
 
+class EmptyResponseSimulator(Simulator):
+    def simulate(self, geometry: np.ndarray) -> SimulationResult:
+        self.num_calls += 1
+        self.num_success += 1
+        return SimulationResult(
+            freqs=np.asarray([], dtype=float),
+            s_params=np.zeros((2, 2, 0), dtype=complex),
+            status="done",
+            actual_geometry=np.asarray(geometry, dtype=float).reshape(-1),
+            metadata={"case_id": f"empty_{self.num_calls:03d}", "cache_hit": False},
+        )
+
+
 def test_optimizer_random_runs_with_general_candidate_space(tmp_path: Path) -> None:
     candidate_space = DiscreteCandidateSpace(
         variable_order=["x", "y"],
@@ -74,3 +87,30 @@ def test_optimizer_random_runs_with_general_candidate_space(tmp_path: Path) -> N
     assert all(row["selection_debug"]["mode"] in {"init", "random"} for row in result.history)
     assert result.recorder_output.json_path.exists()
     assert result.checkpoint_path.exists()
+
+
+def test_optimizer_random_marks_empty_simulation_response_failed(tmp_path: Path) -> None:
+    candidate_space = DiscreteCandidateSpace(
+        variable_order=["x", "y"],
+        candidate_geometries=np.asarray([[0.0, 0.0]], dtype=float),
+    )
+    spec = EncodedScalarSpec()
+    optimizer = OptimizerRandom(
+        candidate_space=candidate_space,
+        simulator=EmptyResponseSimulator(),
+        optimization_spec=spec,
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records"),
+        budget=1,
+        seed=2,
+        run_id="random_empty_response",
+        checkpoint_path=tmp_path / "random_empty_response.checkpoint.json",
+    )
+
+    result = optimizer.run()
+
+    assert len(result.history) == 1
+    trial = result.history[0]
+    assert trial["simulation_status"] == "failed"
+    assert trial["simulation_error"] == "simulation response has no frequency samples"
+    assert trial["objective"] == float("inf")
+    assert result.state.evaluated_geometries == []

@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - pytest uses src/ as pythonpath
 DEFAULT_PORT_COMBINATIONS = [(0, 0), (0, 1)]
 DEFAULT_BCLF_INPUT_MIN = [7.7, 8.0, 7.8, 0.9, 0.7, 0.9, 0.13, 0.55, 3.5e9]
 DEFAULT_BCLF_INPUT_MAX = [7.9, 8.2, 8.0, 1.1, 0.9, 1.1, 0.16, 0.6, 8.7e9]
+DEFAULT_FOURIER_BANDS = [1.0, 2.0, 4.0, 8.0, 16.0]
 
 
 class _FlattenedResponseDataset:
@@ -101,6 +102,8 @@ class LegacyBNNResponseSurrogate:
     ) -> None:
         self.input_bounds_min = list(input_bounds_min or DEFAULT_BCLF_INPUT_MIN)
         self.input_bounds_max = list(input_bounds_max or DEFAULT_BCLF_INPUT_MAX)
+        if len(self.input_bounds_min) != len(self.input_bounds_max):
+            raise ValueError("input_bounds_min and input_bounds_max must have the same length")
         self.hidden_dims = list(hidden_dims or [256, 256, 256])
         self.prior_sigma = float(prior_sigma)
         self.epochs = int(epochs)
@@ -120,6 +123,7 @@ class LegacyBNNResponseSurrogate:
         self._regularizer = None
         self._optimizer = None
         self.trained_epochs = 0
+        self.surrogate_variant = "raw"
 
     @property
     def is_fitted(self) -> bool:
@@ -205,7 +209,7 @@ class LegacyBNNResponseSurrogate:
         prior_mus = [0.0] * len(self.hidden_dims)
         prior_sigmas = [self.prior_sigma] * len(self.hidden_dims)
         return MultiOutputBNN(
-            input_dim=9,
+            input_dim=self.input_dim,
             hidden_dims=self.hidden_dims,
             prior_mus=prior_mus,
             prior_sigmas=prior_sigmas,
@@ -235,6 +239,15 @@ class LegacyBNNResponseSurrogate:
 
         payload = torch.load(path, map_location=torch.device(device or "cpu"))
         config = dict(payload["config"])
+        variant = str(config.pop("surrogate_variant", "raw"))
+        if cls is LegacyBNNResponseSurrogate and variant != "raw":
+            raise ValueError(
+                f"Checkpoint variant {variant!r} requires loading with the matching surrogate class"
+            )
+        if cls is not LegacyBNNResponseSurrogate and variant != cls.surrogate_variant_name():
+            raise ValueError(
+                f"Checkpoint variant {variant!r} does not match loader {cls.__name__}"
+            )
         if device is not None:
             config["device"] = device
         obj = cls(**config)
@@ -255,8 +268,17 @@ class LegacyBNNResponseSurrogate:
         obj.trained_epochs = int(payload.get("trained_epochs", obj.epochs))
         return obj
 
+    @property
+    def input_dim(self) -> int:
+        return len(self.input_bounds_min)
+
+    @classmethod
+    def surrogate_variant_name(cls) -> str:
+        return "raw"
+
     def config_dict(self) -> dict[str, Any]:
         return {
+            "surrogate_variant": self.surrogate_variant,
             "input_bounds_min": list(self.input_bounds_min),
             "input_bounds_max": list(self.input_bounds_max),
             "hidden_dims": list(self.hidden_dims),
@@ -352,10 +374,14 @@ class LegacyBNNResponseSurrogate:
 
     def _build_flat_inputs(self, dataset: BCLFResponseDataset, indices: np.ndarray) -> np.ndarray:
         rows: list[np.ndarray] = []
+        frequency_features = self._frequency_features(dataset.freqs)
         for idx in indices:
             geom = np.repeat(dataset.X[idx].reshape(1, -1), dataset.n_freqs, axis=0)
-            rows.append(np.column_stack([geom, dataset.freqs]))
+            rows.append(np.column_stack([geom, frequency_features]))
         return np.vstack(rows)
+
+    def _frequency_features(self, freqs_hz: np.ndarray) -> np.ndarray:
+        return np.asarray(freqs_hz, dtype=float).reshape(-1, 1)
 
     def _output_channels(self) -> dict[str, tuple[int, Any]]:
         if self.target_mode == "db":
@@ -402,6 +428,72 @@ class LegacyBNNResponseSurrogate:
             state = payload.get(name)
             regularizers[name] = _TensorStandardizer.from_state_dict(state) if state else NoneRegularizer()
         return regularizers
+
+
+class FourierBNNResponseSurrogate(LegacyBNNResponseSurrogate):
+    """Legacy BNN response surrogate with Fourier-encoded frequency features."""
+
+    def __init__(
+        self,
+        *,
+        fourier_bands: list[float] | None = None,
+        include_raw_frequency: bool = True,
+        frequency_min_hz: float = DEFAULT_BCLF_INPUT_MIN[-1],
+        frequency_max_hz: float = DEFAULT_BCLF_INPUT_MAX[-1],
+        input_bounds_min: list[float] | None = None,
+        input_bounds_max: list[float] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.fourier_bands = [float(v) for v in (fourier_bands or DEFAULT_FOURIER_BANDS)]
+        if not self.fourier_bands:
+            raise ValueError("fourier_bands must be non-empty")
+        self.include_raw_frequency = bool(include_raw_frequency)
+        self.frequency_min_hz = float(frequency_min_hz)
+        self.frequency_max_hz = float(frequency_max_hz)
+        if self.frequency_min_hz >= self.frequency_max_hz:
+            raise ValueError("frequency_min_hz must be < frequency_max_hz")
+
+        geometry_min = list(input_bounds_min or DEFAULT_BCLF_INPUT_MIN[:8])
+        geometry_max = list(input_bounds_max or DEFAULT_BCLF_INPUT_MAX[:8])
+        if len(geometry_min) != 8 or len(geometry_max) != 8:
+            raise ValueError("FourierBNNResponseSurrogate expects 8 geometry input bounds")
+
+        encoded_min = list(geometry_min)
+        encoded_max = list(geometry_max)
+        if self.include_raw_frequency:
+            encoded_min.append(0.0)
+            encoded_max.append(1.0)
+        encoded_min.extend([-1.0] * (2 * len(self.fourier_bands)))
+        encoded_max.extend([1.0] * (2 * len(self.fourier_bands)))
+        super().__init__(input_bounds_min=encoded_min, input_bounds_max=encoded_max, **kwargs)
+        self.surrogate_variant = self.surrogate_variant_name()
+
+    @classmethod
+    def surrogate_variant_name(cls) -> str:
+        return "fourier"
+
+    def config_dict(self) -> dict[str, Any]:
+        config = super().config_dict()
+        # Store only geometry bounds; Fourier encoded bounds are reconstructed.
+        config["input_bounds_min"] = list(self.input_bounds_min[:8])
+        config["input_bounds_max"] = list(self.input_bounds_max[:8])
+        config["fourier_bands"] = list(self.fourier_bands)
+        config["include_raw_frequency"] = bool(self.include_raw_frequency)
+        config["frequency_min_hz"] = float(self.frequency_min_hz)
+        config["frequency_max_hz"] = float(self.frequency_max_hz)
+        return config
+
+    def _frequency_features(self, freqs_hz: np.ndarray) -> np.ndarray:
+        freq = np.asarray(freqs_hz, dtype=float).reshape(-1)
+        f_norm = (freq - self.frequency_min_hz) / (self.frequency_max_hz - self.frequency_min_hz)
+        columns: list[np.ndarray] = []
+        if self.include_raw_frequency:
+            columns.append(f_norm)
+        for band in self.fourier_bands:
+            phase = 2.0 * np.pi * float(band) * f_norm
+            columns.append(np.sin(phase))
+            columns.append(np.cos(phase))
+        return np.column_stack(columns)
 
 
 def _legacy_train(

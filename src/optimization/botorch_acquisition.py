@@ -23,7 +23,14 @@ class BoTorchAcquisitionBackend(Protocol):
 
     name: str
 
-    def fit(self, X: np.ndarray, y: np.ndarray, *, seed: int | None = None) -> AcquisitionFitResult:
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> AcquisitionFitResult:
         ...
 
     def select(
@@ -49,7 +56,14 @@ class GPqLogEIAcquisitionBackend:
         self._model = None
         self._seed = 0
 
-    def fit(self, X: np.ndarray, y: np.ndarray, *, seed: int | None = None) -> AcquisitionFitResult:
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> AcquisitionFitResult:
         try:
             from botorch.fit import fit_gpytorch_mll
             from botorch.models import SingleTaskGP
@@ -151,7 +165,14 @@ class GPExpectedImprovementBackend:
         self._model = None
         self._seed = 0
 
-    def fit(self, X: np.ndarray, y: np.ndarray, *, seed: int | None = None) -> AcquisitionFitResult:
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> AcquisitionFitResult:
         try:
             from botorch.fit import fit_gpytorch_mll
             from botorch.models import SingleTaskGP

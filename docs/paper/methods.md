@@ -2,91 +2,133 @@
 
 ## Problem Setup
 
-We optimize parameterized HFSS design variables for bandpass filter performance under expensive simulator evaluations.
+We optimize a bandpass coupled-line filter (BCLF) whose HFSS evaluation is
+expensive enough that every simulator call must be tracked as part of the
+experiment budget.
 
-Core outcomes:
-- Maximize objective derived from passband/stopband and center-frequency requirements.
-- Minimize simulator calls while maintaining design quality.
+The design vector is ordered as:
 
-## System Components
+```text
+x = [L, L1, L2, W, W1, W2, S1, S2]
+```
 
-- Optimization layer (`src/optimization/`):
-  - `OptimizerBoTorch` for queue-backed real simulation flow.
-  - Replay/grid workflows for offline comparative studies.
-- Simulation layer:
-  - Queue-backed server/worker execution for real HFSS evaluations.
-  - Optional replay/fake simulators for controlled experiments.
-- Result recording:
-  - Per-run `json/csv/checkpoint` artifacts in `experiments/`.
+The current online target uses `BCLFOptimizationSpec` with:
 
-## Method Portfolio (Extensible)
+| Item | Value |
+|---|---|
+| Passband | `[4.8, 5.4] GHz` |
+| Lower stopband | `[3.6, 4.4] GHz` |
+| Upper stopband | `[5.8, 8.7] GHz` |
+| Passband transmission limit | worst `S21 >= -5.0 dB` |
+| Passband return-loss limit | worst `S11 <= -7.0 dB` |
+| Stopband attenuation limit | worst stopband `S21 <= -15.0 dB` |
 
-This section is intentionally structured for multiple methods. Add new method families as peer subsections, not as edits inside BO-only text.
+Human-facing design quality improves when passband `S21` is high, passband
+`S11` is low, and stopband `S21` is low. The optimizer-facing scalar objective
+is minimized. All convergence plots and tables should therefore use
+`best_so_far`, where lower is better.
 
-### M1: Bayesian Optimization (current baseline family)
+The full target, bounds, queue settings, and artifact roots are maintained in
+[BCLF Optimization Target And Online Settings](../bclf_optimization_target.md).
 
-High-level BO loop:
-1. Initialize with `N_INIT` random or seeded trials.
-2. Fit/update GP surrogate.
-3. Select next candidate by acquisition policy (for example UCB/EI variants).
-4. Evaluate candidate (queue-backed simulator or replay simulator).
-5. Record trial history and update best-so-far objective.
+## Shared Optimization Backbone
 
-### M2: BNN Response Surrogate (offline feasibility)
+All online methods use the same simulator-facing loop:
 
-- Method name: legacy BNN response surrogate.
-- Core idea: train a Bayesian neural network on cached BCLF responses using
-  geometry plus frequency as input, and predict `S11`/`S21` directly in dB.
-- Why it differs from M1: this is a response surrogate, not a GP scalar
-  objective surrogate or acquisition optimizer.
-- Expected advantage/risk: it can learn full response curves for cheap offline
-  screening, but it must be validated on held-out responses before being used
-  for candidate ranking or online optimization.
-- Experiment reference:
-  - [BNN Surrogate Experiments](../bnn_surrogate_experiments.md)
+1. Sample or select one candidate from a finite candidate pool.
+2. Send the geometry through a simulator adapter.
+3. Score the returned `S11` and `S21` response with the same
+   `BCLFOptimizationSpec`.
+4. Append a trial row to the run history.
+5. Save JSON, CSV, and checkpoint artifacts.
 
-### M3: Future Method Slot
+The backbone keeps HFSS and queue interactions behind adapter layers. The online
+campaigns use `ServerQueueSimulator`; replay and smoke experiments use replay
+simulators over cached response datasets. Checkpoint completion is judged by
+history length reaching the target trial count, not by status labels alone.
 
-- Method name: `TBD`
-- Core idea: `TBD`
-- Why it differs from M1/M2: `TBD`
-- Expected advantage/risk: `TBD`
+## Baseline Methods
 
-Objective details should be defined in experiment configs/notebooks and cited in each experiment card.
+### BO: GP qLogEI
 
-## Interface Boundaries
+The BO baseline uses `OptimizerBoTorch` with a Gaussian-process surrogate and
+global qLogEI selection over the remaining candidate pool.
 
-- External tool interactions (HFSS, queue I/O) are treated as adapter-layer responsibilities.
-- Paper-facing method claims should reference:
-  - algorithm settings in notebooks/configs,
-  - and concrete output artifacts under `experiments/`.
+| Setting | Value |
+|---|---|
+| Notebook | `notebooks/bo_online_experiment.ipynb` |
+| Optimizer | `OptimizerBoTorch` |
+| Method label | `global_gp_qlogei` |
+| Initial trials | `N_INIT = 30` |
+| BO trials | `BUDGET = 50` |
+| Total trials per seed | `80` |
+| Seeds | `[0, 1, 2, 3, 4]` |
+| Output root | `experiments/bo_online_general/` |
 
-## Assumptions and Constraints
+### LHS Random
 
-- Stochastic behavior is controlled by explicit seed management per run family.
-- Campaign completion criteria for online experiments should be evaluated by target trial count (`N_INIT + BUDGET`) rather than status alone.
+The LHS baseline uses `OptimizerLHSRandom` with the same target, geometry
+bounds, candidate-pool size, queue-backed simulator, seed convention, and
+artifact contract as BO. It has no surrogate or acquisition model.
 
-## Method Comparison Hooks
+| Setting | Value |
+|---|---|
+| Notebook | `notebooks/lhs_online_experiment.ipynb` |
+| Optimizer | `OptimizerLHSRandom` |
+| Method label | `lhs_random` |
+| Total trials per seed | `80` |
+| Seeds | `[0, 1, 2, 3, 4]` |
+| Output root | `experiments/lhs_online_general/` |
 
-Use these hooks when adding non-BO methods:
-- Shared objective definition across compared methods (or explicitly documented differences).
-- Shared seed policy and reporting protocol.
-- Shared artifact contract (`json/csv` summary + per-run history links).
+## BNN Response Modeling
 
-Implementation-level guidance for adding new optimizers is maintained in
+The BNN work is response-level rather than scalar-objective-only. The
+`LegacyBNNResponseSurrogate` learns `S11` and `S21` response curves from
+geometry plus frequency inputs, then derives objective values by passing
+predicted responses through the same `BCLFOptimizationSpec`.
+
+Two response-surrogate variants are implemented:
+
+| Variant | Implementation | Purpose |
+|---|---|---|
+| Raw frequency BNN | `modeling.LegacyBNNResponseSurrogate` | Baseline response surrogate |
+| Fourier frequency BNN | `modeling.FourierBNNResponseSurrogate` | Frequency-feature variant for response-shape experiments |
+
+The current optimizer-side BNN acquisition path is
+`optimization.BNNExpectedImprovementBackend`. It builds a response dataset from
+completed optimizer history rows, samples predicted responses for remaining
+candidates, scores those sampled responses with the same optimization spec, and
+selects by EI-style acquisition value.
+
+## BNN Online Baseline Protocol
+
+The full online BNN notebook is implemented but its queue-backed campaign has
+not been completed. The planned production protocol is:
+
+| Setting | Value |
+|---|---|
+| Notebook | `notebooks/bnn_online_experiment.ipynb` |
+| Optimizer | `OptimizerBoTorch` with `BNNExpectedImprovementBackend` |
+| Method label | `bnn_response_qlogei` |
+| Initial trials | `N_INIT = 30` |
+| BNN-guided trials | `BUDGET = 50` |
+| First BNN fit | after 30 initial cases, train 800 epochs |
+| Incremental learning | warm-start 20 epochs after each new online case |
+| Seeds | `[0, 1, 2, 3, 4]` |
+| Output root | `experiments/bnn_online_general/` |
+
+Until the full online campaign finishes, paper claims should describe BNN
+feasibility, replay behavior, and acquisition-quality diagnostics only. They
+should not make a final online ranking claim.
+
+## Paper Claim Boundaries
+
+- Supported now: method descriptions, objective protocol, BO online baseline,
+  partial LHS online status, offline BNN feasibility, few-shot BNN updating,
+  response-shape replay studies, BNN EI replay, and acquisition-quality
+  diagnostics.
+- Not supported yet: BNN online performance superiority, final BO-vs-LHS-vs-BNN
+  online ranking, or any conclusion based on incomplete BNN queue-backed runs.
+
+Operational implementation guidance is maintained in
 [Optimization Experiment Backbone](../optimization_experiment_backbone.md).
-
-The TuRBO-specific BCLF target and parameter bounds are documented in
-[BCLF TuRBO Optimization Target](../bclf_turbo_optimization_target.md).
-
-## Current Objective Spec Reference (BO Online, BCLF)
-
-- The current BO Online BCLF objective is documented in:
-  - [experiments.md](experiments.md), section `Current Optimization Goal (BCLF, BO Online)`.
-- When the objective changes, update that section first, then update claim mappings in `results_index.md`.
-
-## Pointers to Operational Docs
-
-- Queue and SFTP behavior: [../sftp_implementation.md](../sftp_implementation.md)
-- Server/worker flow: [../server_worker_submit_receive_flow.md](../server_worker_submit_receive_flow.md)
-- Simulation API context: [../simulation_interface.md](../simulation_interface.md)

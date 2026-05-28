@@ -4,8 +4,14 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from modeling import BCLFResponseDataset, BCLFTouchstoneDatasetLoader, LegacyBNNResponseSurrogate
+from modeling import (
+    BCLFResponseDataset,
+    BCLFTouchstoneDatasetLoader,
+    FourierBNNResponseSurrogate,
+    LegacyBNNResponseSurrogate,
+)
 
 
 def _synthetic_dataset(n: int = 5, n_freqs: int = 3) -> BCLFResponseDataset:
@@ -107,6 +113,7 @@ def test_legacy_bnn_adapter_trains_and_predicts_sparam_shape() -> None:
     assert pred.shape == (1, 2, 2, 2)
     assert np.all(np.isfinite(pred.real))
     assert np.allclose(pred[:, 1, 0, :], pred[:, 0, 1, :])
+    assert model.input_dim == 9
 
 
 def test_legacy_bnn_db_mode_save_load_predicts(tmp_path: Path) -> None:
@@ -182,3 +189,62 @@ def test_legacy_bnn_save_load_after_update_preserves_optimizer(tmp_path: Path) -
     assert loaded._optimizer is not None
     assert pred.shape == (1, 2, 2, 2)
     assert np.all(np.isfinite(pred.real))
+
+
+def test_fourier_bnn_builds_expected_input_features() -> None:
+    dataset = _synthetic_dataset(n=3, n_freqs=3)
+    model = FourierBNNResponseSurrogate(
+        hidden_dims=[8],
+        epochs=1,
+        batch_size=4,
+        mc_samples=2,
+        seed=15,
+        device="cpu",
+        target_mode="db",
+        frequency_min_hz=dataset.freqs.min(),
+        frequency_max_hz=dataset.freqs.max(),
+    )
+
+    flat = model._build_flat_inputs(dataset, np.asarray([0], dtype=int))
+    repeated = model._build_flat_inputs(dataset, np.asarray([0], dtype=int))
+
+    assert model.input_dim == 19
+    assert flat.shape == (dataset.n_freqs, 19)
+    assert np.allclose(flat, repeated)
+    assert np.allclose(flat[:, :8], dataset.X[0].reshape(1, -1))
+    assert np.all(flat[:, 8] >= 0.0)
+    assert np.all(flat[:, 8] <= 1.0)
+    assert not np.allclose(flat[0, 9:], flat[1, 9:])
+
+
+def test_fourier_bnn_fit_save_load_and_update(tmp_path: Path) -> None:
+    dataset = _synthetic_dataset(n=4, n_freqs=3)
+    model = FourierBNNResponseSurrogate(
+        hidden_dims=[8],
+        epochs=1,
+        batch_size=4,
+        mc_samples=2,
+        seed=16,
+        device="cpu",
+        target_mode="db",
+        fourier_bands=[1, 2],
+        include_raw_frequency=True,
+    )
+
+    model.fit(dataset, [0, 1], epochs=1)
+    pred = model.predict_s_params(dataset, [2], mc_samples=2)
+    path = tmp_path / "fourier_bnn.pt"
+    model.save(path, metadata={"variant": "fourier"})
+    with pytest.raises(ValueError, match="matching surrogate class"):
+        LegacyBNNResponseSurrogate.load(path, device="cpu")
+    loaded = FourierBNNResponseSurrogate.load(path, device="cpu")
+    loaded.update(dataset, [0, 1, 2], epochs=1)
+    loaded_pred = loaded.predict_s_params(dataset, [3], mc_samples=2)
+
+    assert pred.shape == (1, 2, 2, 3)
+    assert loaded.input_dim == 13
+    assert loaded.surrogate_variant == "fourier"
+    assert loaded.fourier_bands == [1.0, 2.0]
+    assert loaded.trained_epochs == 2
+    assert loaded_pred.shape == (1, 2, 2, 3)
+    assert np.all(np.isfinite(loaded_pred.real))

@@ -81,9 +81,18 @@ class OptimizerBoTorch(OptimizerBase):
             self._last_fit_error = None
             return
 
+        X_actual_np = np.asarray([row["geometry"] for row in valid_trials], dtype=float)
         X_np = np.asarray([row["geometry_normalized"] for row in valid_trials], dtype=float)
         y_np = np.asarray([self._extract_scalar_objective(row) for row in valid_trials], dtype=float).reshape(-1, 1)
-        result = self.acquisition_backend.fit(X_np, y_np, seed=self.seed)
+        result = self.acquisition_backend.fit(
+            X_np,
+            y_np,
+            seed=self.seed,
+            X_actual=X_actual_np,
+            history=valid_trials,
+            optimization_spec=self.optimization_spec,
+            variable_order=self.candidate_space.variable_order,
+        )
         self._model_ready = bool(result.ready)
         self._last_fit_error = result.error
 

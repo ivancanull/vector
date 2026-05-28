@@ -172,7 +172,7 @@ class OptimizerBase(ABC):
             }
         )
         for row in self._history:
-            self.recorder.record_trial(row)
+            self.recorder.record_trial(self._serializable_trial(row))
 
     def on_iteration_start(self, iteration: int) -> None:
         if hasattr(self.simulator, "set_context"):
@@ -235,7 +235,8 @@ class OptimizerBase(ABC):
             return
         payload = json.loads(path_obj.read_text(encoding="utf-8"))
         self.run_id = str(payload["run_id"])
-        self.seed = payload.get("seed", self.seed)
+        checkpoint_seed = payload.get("seed", self.seed)
+        self.seed = checkpoint_seed
         state = payload.get("state", {})
         self.state = OptimizerState(
             evaluated_geometries=[list(map(float, row)) for row in state.get("evaluated_geometries", [])],
@@ -254,6 +255,8 @@ class OptimizerBase(ABC):
         self._sim_elapsed_total = float(timing.get("sim_elapsed_total", 0.0))
         if "rng_state" in payload:
             self._rng.bit_generator.state = payload["rng_state"]
+        elif checkpoint_seed is not None:
+            self._rng = np.random.default_rng(checkpoint_seed)
 
     def _initial_selections(self) -> list[SelectionResult]:
         candidates = self.candidate_space.sample_initial(1, self._rng)
@@ -278,7 +281,17 @@ class OptimizerBase(ABC):
         else:
             selection_debug["actual_geometry_source"] = "simulation.actual_geometry"
 
-        if simulation.status != "done" or simulation.freqs is None or simulation.s_params is None:
+        response_error = self._response_validation_error(simulation)
+        simulation_status = simulation.status
+        simulation_error = simulation.error
+        if response_error is not None:
+            simulation_status = "failed"
+            if simulation_error is None:
+                simulation_error = response_error
+            elif simulation_error != response_error:
+                simulation_error = f"{simulation_error}; {response_error}"
+
+        if response_error is not None:
             spec_results = None
             objective_value = float("inf")
             objective_array = np.asarray([float("inf")], dtype=float)
@@ -322,14 +335,16 @@ class OptimizerBase(ABC):
             "cache_hit": self._metadata_value(simulation.metadata, "cache_hit"),
             "job_id": self._metadata_value(simulation.metadata, "job_id"),
             "case_id": self._metadata_value(simulation.metadata, "case_id"),
-            "simulation_status": simulation.status,
-            "simulation_error": simulation.error,
+            "simulation_status": simulation_status,
+            "simulation_error": simulation_error,
             "simulation_metadata": simulation.metadata,
             "t_engine_sec": 0.0,
             "t_simulator_sec": record.t_simulator_sec,
             "optimizer_backend": self.optimizer_backend,
             "selection_debug": selection_debug,
             "spec_results_metadata": metadata,
+            "_response_freqs": None if simulation.freqs is None else np.asarray(simulation.freqs, dtype=float),
+            "_response_s_params": None if simulation.s_params is None else np.asarray(simulation.s_params, dtype=complex),
         }
 
     def _actual_geometry(self, requested: np.ndarray, simulation: SimulationResult) -> np.ndarray:
@@ -337,9 +352,32 @@ class OptimizerBase(ABC):
             return np.asarray(requested, dtype=float).reshape(-1)
         return np.asarray(simulation.actual_geometry, dtype=float).reshape(-1)
 
+    @staticmethod
+    def _response_validation_error(simulation: SimulationResult) -> str | None:
+        if simulation.status != "done":
+            return simulation.error or "simulation did not complete"
+        if simulation.freqs is None:
+            return "simulation response is missing freqs"
+        if simulation.s_params is None:
+            return "simulation response is missing s_params"
+
+        freqs = np.asarray(simulation.freqs, dtype=float).reshape(-1)
+        if freqs.size == 0:
+            return "simulation response has no frequency samples"
+
+        s_params = np.asarray(simulation.s_params, dtype=complex)
+        if s_params.ndim != 3:
+            return "simulation s_params must be a 3D array shaped (ports, ports, freqs)"
+        if s_params.shape[2] != freqs.size:
+            return (
+                f"simulation s_params frequency axis length {s_params.shape[2]} "
+                f"does not match freqs length {freqs.size}"
+            )
+        return None
+
     def _record_trial(self, trial: dict[str, Any]) -> None:
         self._history.append(dict(trial))
-        self.recorder.record_trial(trial)
+        self.recorder.record_trial(self._serializable_trial(trial))
         if self.progress_callback is not None:
             self.progress_callback(dict(trial), list(self._history))
 
@@ -368,7 +406,7 @@ class OptimizerBase(ABC):
                 "step": self.state.step,
             },
             "candidate_space": self.candidate_space.state_dict(),
-            "history": self._history,
+            "history": [self._serializable_trial(row) for row in self._history],
             "timing": {
                 "engine_elapsed_total": float(self._engine_elapsed_total),
                 "sim_elapsed_total": float(self._sim_elapsed_total),
@@ -381,6 +419,12 @@ class OptimizerBase(ABC):
             "rng_state": self._rng.bit_generator.state,
         }
         self.checkpoint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+
+    @staticmethod
+    def _serializable_trial(trial: dict[str, Any]) -> dict[str, Any]:
+        """Drop in-memory response arrays before writing JSON/CSV artifacts."""
+
+        return {key: value for key, value in trial.items() if not key.startswith("_response_")}
 
     @staticmethod
     def _metadata_value(metadata: dict[str, Any] | None, key: str) -> Any:

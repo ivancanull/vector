@@ -60,6 +60,7 @@ from .botorch_acquisition import (
     GPqLogEIAcquisitionBackend,
 )
 from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
+from .optimizer_lhs_random import OptimizerLHSRandom
 from .optimizer_random import OptimizerRandom
 from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
 from .surrogates import ANNSurrogate, BNNSurrogate, GPSurrogate, SurrogateModel
@@ -108,6 +109,7 @@ __all__ = [
     "OptimizerBase",
     "OptimizerANN",
     "OptimizerBoTorch",
+    "OptimizerLHSRandom",
     "OptimizerRandom",
     "OnlineANNOptimizer",
     "PeakFrequencyMetric",

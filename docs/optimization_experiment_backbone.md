@@ -1,6 +1,6 @@
 # Optimization Experiment Backbone
 
-This page summarizes the reusable experiment structure for adding optimization algorithms beyond the current BO, TuRBO, ANN, and random baselines.
+This page summarizes the reusable experiment structure for adding optimization algorithms beyond the current BO, ANN, and random baselines.
 
 ## Core Contract
 
@@ -42,7 +42,7 @@ Use these classes as the stable boundaries when adding another algorithm:
 
 ## Current Algorithm Families
 
-- `OptimizerBoTorch`: GP/BoTorch optimizer with qLogEI-style discrete acquisition. It also supports single-region trust-region behavior used by TuRBO-style online runs.
+- `OptimizerBoTorch`: GP/BoTorch optimizer with qLogEI-style discrete acquisition.
 - `OptimizerANN`: response-surrogate optimizer using an ANN/TCN model and the same base loop. It stores ANN training sidecar data next to the checkpoint.
 - `OptimizerRandom`: random baseline over the same candidate-space/simulator/spec contract.
 
@@ -103,8 +103,9 @@ For fair comparisons across algorithms:
 - Keep raw external tool calls inside simulator or worker adapters, not optimizer subclasses.
 - Do not fork the experiment loop for convenience; extend the backbone unless a new evaluation mode truly requires a different lifecycle.
 
-For the current TuRBO BCLF online campaign target and geometry bounds, see
-[BCLF TuRBO Optimization Target](bclf_turbo_optimization_target.md).
+For the current BCLF online campaign target, geometry bounds, and BO/LHS
+comparison settings, see
+[BCLF Optimization Target And Online Settings](bclf_optimization_target.md).
 
 For the offline BNN response-surrogate feasibility study, see
 [BNN Surrogate Experiments](bnn_surrogate_experiments.md).

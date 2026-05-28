@@ -7,6 +7,7 @@ from .bclf_dataset import (
 from .legacy_bnn_surrogate import (
     DEFAULT_BCLF_INPUT_MAX,
     DEFAULT_BCLF_INPUT_MIN,
+    FourierBNNResponseSurrogate,
     LegacyBNNResponseSurrogate,
 )
 from .response_surrogate import (
@@ -25,6 +26,7 @@ __all__ = [
     "DEFAULT_BCLF_INPUT_MAX",
     "DEFAULT_BCLF_INPUT_MIN",
     "DEFAULT_BCLF_VARIABLE_ORDER",
+    "FourierBNNResponseSurrogate",
     "LegacyBNNResponseSurrogate",
     "ResponseSurrogate",
     "ResponseSurrogatePrediction",

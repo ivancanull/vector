@@ -1,4 +1,0 @@
-best_objective,final_best_so_far,method,num_trials,seed
--9.019374236073235,-9.019374236073235,gp_scalar,5,0
--9.019374236073235,-9.019374236073235,legacy_bnn_response,5,0
--9.019374236073235,-9.019374236073235,random,5,0

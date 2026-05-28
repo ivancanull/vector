@@ -7,6 +7,12 @@ import numpy as np
 
 from .botorch_acquisition import AcquisitionFitResult
 from .optimizer_base import SelectionResult
+from .optimization_spec import OptimizationSpec
+
+try:
+    from src.modeling import BCLFResponseDataset, LegacyBNNResponseSurrogate
+except ImportError:  # pragma: no cover - tests often put src/ directly on PYTHONPATH
+    from modeling import BCLFResponseDataset, LegacyBNNResponseSurrogate
 
 try:
     from src.bayesian.modules.loss import BKLLoss
@@ -260,10 +266,12 @@ class BNNExpectedImprovementAcquisition:
 
 
 class BNNExpectedImprovementBackend:
-    """Scalar-objective BNN backend for OptimizerBoTorch.
+    """Response-surrogate BNN backend for OptimizerBoTorch.
 
-    This backend owns both the BNN surrogate and the custom acquisition. It is
-    passed into OptimizerBoTorch as an input dependency.
+    The BNN learns S-parameter response curves. Acquisition scores are computed
+    by converting BNN response samples back through the optimizer's
+    OptimizationSpec, so the EI target is always the same metric used to score
+    real simulations.
     """
 
     name = "bnn_qlogei"
@@ -278,11 +286,20 @@ class BNNExpectedImprovementBackend:
         self.device_name = device
         self._torch = None
         self._device = None
-        self._surrogate: ScalarBNNRegressor | None = None
+        self._surrogate: LegacyBNNResponseSurrogate | None = None
+        self._train_dataset: BCLFResponseDataset | None = None
+        self._optimization_spec: OptimizationSpec | None = None
         self._last_train_count = 0
         self._last_fit_mode = "not_fitted"
 
-    def fit(self, X: np.ndarray, y: np.ndarray, *, seed: int | None = None) -> AcquisitionFitResult:
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> AcquisitionFitResult:
         try:
             import torch
         except ImportError as exc:
@@ -294,36 +311,51 @@ class BNNExpectedImprovementBackend:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         try:
-            X_np = np.asarray(X, dtype=np.float32)
-            y_np = np.asarray(y, dtype=np.float32).reshape(-1, 1)
-            if self._should_warm_start(X_np):
+            _ = np.asarray(X, dtype=np.float32)
+            _ = np.asarray(y, dtype=np.float32).reshape(-1, 1)
+            dataset = self._response_dataset_from_fit_kwargs(kwargs)
+            optimization_spec = kwargs.get("optimization_spec")
+            if optimization_spec is None:
+                raise ValueError("BNN response acquisition requires optimization_spec")
+            self._optimization_spec = optimization_spec
+            train_indices = np.arange(dataset.n_samples, dtype=int)
+            if self._should_warm_start(dataset):
                 assert self._surrogate is not None
-                self._surrogate.update(X_np, y_np, epochs=int(self.config.update_epochs))
+                self._surrogate.update(dataset, train_indices, epochs=int(self.config.update_epochs))
                 self._last_fit_mode = "warm_start_update"
             else:
-                surrogate = ScalarBNNRegressor(
-                    input_dim=X_np.shape[1],
-                    config=self.config,
+                surrogate = LegacyBNNResponseSurrogate(
+                    hidden_dims=list(self.config.hidden_dims),
+                    prior_sigma=float(self.config.prior_sigma),
+                    epochs=int(self._initial_epoch_count(dataset.n_samples)),
+                    batch_size=int(self.config.batch_size),
+                    lr=float(self.config.lr),
+                    bayesian_loss_weight=float(self.config.bayesian_loss_weight),
+                    mc_samples=int(self.config.mc_samples),
+                    target_mode="db",
                     seed=0 if seed is None else int(seed),
                     device=str(self._device),
                 )
-                surrogate.fit(X_np, y_np, epochs=self._initial_epoch_count(len(X_np)))
+                surrogate.fit(dataset, train_indices, epochs=self._initial_epoch_count(dataset.n_samples))
                 self._surrogate = surrogate
                 self._last_fit_mode = "initial_fit"
-            self._last_train_count = int(len(X_np))
+            self._train_dataset = dataset
+            self._last_train_count = int(dataset.n_samples)
             return AcquisitionFitResult(ready=True)
         except (RuntimeError, ValueError, FloatingPointError) as exc:
             self._surrogate = None
+            self._train_dataset = None
+            self._optimization_spec = None
             self._last_train_count = 0
             self._last_fit_mode = "failed"
             return AcquisitionFitResult(ready=False, error=f"{type(exc).__name__}: {exc}")
 
-    def _should_warm_start(self, X: np.ndarray) -> bool:
+    def _should_warm_start(self, dataset: BCLFResponseDataset) -> bool:
         return (
             bool(self.config.warm_start)
             and self._surrogate is not None
             and self._surrogate.is_fitted
-            and int(len(X)) > int(self._last_train_count)
+            and int(dataset.n_samples) > int(self._last_train_count)
         )
 
     def _initial_epoch_count(self, train_count: int) -> int:
@@ -333,6 +365,85 @@ class BNNExpectedImprovementBackend:
         extra_samples = int(train_count) - int(initial)
         return int(self.config.epochs) + extra_samples * int(self.config.update_epochs)
 
+    def _response_dataset_from_fit_kwargs(self, kwargs: dict[str, Any]) -> BCLFResponseDataset:
+        history = list(kwargs.get("history") or [])
+        X_actual = np.asarray(kwargs.get("X_actual"), dtype=float)
+        variable_order = list(kwargs.get("variable_order") or [])
+        if X_actual.ndim != 2 or X_actual.shape[0] == 0:
+            raise ValueError("BNN response acquisition requires non-empty X_actual")
+        if not variable_order:
+            raise ValueError("BNN response acquisition requires variable_order")
+        if X_actual.shape[1] != len(variable_order):
+            raise ValueError("X_actual dimension must match variable_order")
+        if len(history) != X_actual.shape[0]:
+            raise ValueError("history length must match X_actual rows")
+
+        freqs_ref: np.ndarray | None = None
+        s_rows: list[np.ndarray] = []
+        case_ids: list[str] = []
+        for pos, row in enumerate(history):
+            freqs = row.get("_response_freqs")
+            s_params = row.get("_response_s_params")
+            if freqs is None or s_params is None:
+                raise ValueError("history rows are missing in-memory response arrays")
+            freqs_arr = np.asarray(freqs, dtype=float).reshape(-1)
+            s_arr = np.asarray(s_params, dtype=complex)
+            if freqs_ref is None:
+                freqs_ref = freqs_arr
+            elif freqs_arr.shape != freqs_ref.shape or not np.allclose(freqs_arr, freqs_ref):
+                raise ValueError("response frequency grids must match for BNN response acquisition")
+            if s_arr.ndim != 3 or s_arr.shape[-1] != len(freqs_arr):
+                raise ValueError("s_params must have shape (ports, ports, n_freq)")
+            s_rows.append(s_arr)
+            case_ids.append(str(row.get("case_id") or f"train_{pos}"))
+
+        if freqs_ref is None:
+            raise ValueError("no response rows available for BNN response acquisition")
+        return BCLFResponseDataset(
+            variable_order=variable_order,
+            freqs=freqs_ref,
+            X=X_actual,
+            s_params=np.asarray(s_rows, dtype=complex),
+            filenames=[f"{case_id}.s2p" for case_id in case_ids],
+            keys=[str(i) for i in range(len(s_rows))],
+            case_ids=case_ids,
+        )
+
+    def _candidate_dataset(self, candidates_actual: np.ndarray) -> BCLFResponseDataset:
+        if self._train_dataset is None:
+            raise RuntimeError("BNN response acquisition backend is not fitted")
+        X = np.asarray(candidates_actual, dtype=float)
+        if X.ndim != 2:
+            raise ValueError("candidates_actual must be a 2D array")
+        dummy = np.zeros((X.shape[0], 2, 2, self._train_dataset.n_freqs), dtype=complex)
+        return BCLFResponseDataset(
+            variable_order=list(self._train_dataset.variable_order),
+            freqs=self._train_dataset.freqs,
+            X=X,
+            s_params=dummy,
+            filenames=[f"candidate_{i}.s2p" for i in range(X.shape[0])],
+            keys=[str(i) for i in range(X.shape[0])],
+            case_ids=[f"candidate_{i}" for i in range(X.shape[0])],
+        )
+
+    def _metric_samples_from_response_samples(self, response_samples: np.ndarray) -> np.ndarray:
+        if self._optimization_spec is None or self._train_dataset is None:
+            raise RuntimeError("BNN response acquisition backend is not fitted")
+        samples = np.asarray(response_samples, dtype=complex)
+        if samples.ndim != 5:
+            raise ValueError("response_samples must have shape (mc, n, ports, ports, n_freq)")
+        metric_rows: list[list[float]] = []
+        for sample_idx in range(samples.shape[0]):
+            row: list[float] = []
+            for candidate_idx in range(samples.shape[1]):
+                value = self._optimization_spec.evaluate(
+                    self._train_dataset.freqs,
+                    samples[sample_idx, candidate_idx],
+                ).scalar_objective()
+                row.append(float(value))
+            metric_rows.append(row)
+        return np.asarray(metric_rows, dtype=float)
+
     def select(
         self,
         *,
@@ -341,45 +452,49 @@ class BNNExpectedImprovementBackend:
         history: list[dict[str, Any]],
         tr_debug: dict[str, Any],
     ) -> SelectionResult:
-        try:
-            from botorch.optim import optimize_acqf_discrete
-        except ImportError as exc:
-            raise RuntimeError(f"ImportError: {exc}") from exc
-
         if self._torch is None or self._device is None or self._surrogate is None:
             raise RuntimeError("BNN acquisition backend is not fitted")
 
-        Xcand = self._torch.tensor(candidates_normalized, dtype=self._torch.float32, device=self._device)
+        Xcand = np.asarray(candidates_actual, dtype=float)
         best_objective = min(float(row["objective"]) for row in history if np.isfinite(float(row["objective"])))
-        acq = BNNExpectedImprovementAcquisition(
-            self._surrogate,
-            best_objective=best_objective,
-            mode=self.config.acquisition,
-            beta=self.config.beta,
-            mc_samples=self.config.mc_samples,
+        candidate_dataset = self._candidate_dataset(Xcand)
+        candidate_indices = np.arange(candidate_dataset.n_samples, dtype=int)
+        _, response_samples = self._surrogate.predict_s_params(
+            candidate_dataset,
+            candidate_indices,
+            mc_samples=int(self.config.mc_samples),
+            return_samples=True,
         )
-        selected_t, values = optimize_acqf_discrete(acq_function=acq, q=1, choices=Xcand)
-        scores = acq(Xcand.unsqueeze(1)).detach().cpu().numpy().reshape(-1)
-        selected_norm = selected_t[0].detach()
-        dists = ((Xcand - selected_norm) ** 2).sum(dim=-1)
-        pos = int(dists.argmin().item())
-        means, variances = self._surrogate.posterior_mean_variance(Xcand[pos].reshape(1, -1))
+        metric_samples = self._metric_samples_from_response_samples(response_samples)
+        improvement = np.maximum(float(best_objective) - metric_samples, 0.0)
+        if self.config.acquisition == "qlogei":
+            scores = np.log(np.maximum(improvement.mean(axis=0), np.finfo(float).tiny))
+        elif self.config.acquisition in {"qei", "ei"}:
+            scores = improvement.mean(axis=0)
+        else:
+            mean = metric_samples.mean(axis=0)
+            std = metric_samples.std(axis=0)
+            scores = -(mean - float(self.config.beta) * std)
+        pos = int(np.argmax(scores))
+        means = metric_samples.mean(axis=0)
+        variances = metric_samples.var(axis=0)
         return SelectionResult(
             requested_geometry=np.asarray(candidates_actual[pos], dtype=float),
-            predicted_mean=float(means.reshape(-1)[0]),
-            predicted_uncertainty=float(np.sqrt(max(float(variances.reshape(-1)[0]), 0.0))),
+            predicted_mean=float(means.reshape(-1)[pos]),
+            predicted_uncertainty=float(np.sqrt(max(float(variances.reshape(-1)[pos]), 0.0))),
             acquisition_score=float(scores[pos]),
             selection_debug={
                 "mode": f"bnn_{self.config.acquisition}_discrete",
                 "model_fit_status": "ok",
                 "selected_pos": pos,
-                "best_score": float(values.detach().cpu().numpy().reshape(-1)[0]),
+                "best_score": float(scores[pos]),
                 "candidate_pool_size": int(len(candidates_actual)),
                 **tr_debug,
                 "bnn_runtime": {
                     "device": str(self._device),
                     "dtype": "torch.float32",
-                    "x_is_normalized": True,
+                    "x_is_normalized": False,
+                    "surrogate": "response",
                     "mc_samples": int(self.config.mc_samples),
                     "epochs": int(self.config.epochs),
                     "update_epochs": int(self.config.update_epochs),
