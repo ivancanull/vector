@@ -1,0 +1,102 @@
+schema_version: 1
+kind: spiral_inductor_template_device
+description: >
+  Generic silicon square spiral inductor definition for generating a
+  template-based HFSS AEDT project. This is a pipeline-validation PDK, not a
+  foundry-qualified process.
+
+template_output:
+  project_path: "D:/ansys/spiral_inductor_template_v1.aedt"
+  template_name: "spiral_inductor_t3_template_v1"
+  design_name: "SpiralInductorT3"
+  setup_name: "Setup1"
+  sweep_name: "Sweep"
+
+pdk:
+  name: "generic_silicon_spiral_v1"
+  length_unit: "um"
+  materials:
+    substrate:
+      name: "silicon"
+      relative_permittivity: 11.9
+      loss_tangent: 0.005
+    oxide:
+      name: "silicon_dioxide"
+      relative_permittivity: 3.9
+      loss_tangent: 0.0002
+    top_metal:
+      name: "copper"
+      conductivity_s_per_m: 5.8e7
+  stackup:
+    substrate:
+      material: "silicon"
+      thickness_um: 300.0
+      z_start_um: -300.0
+    oxide:
+      material: "silicon_dioxide"
+      thickness_um: 3.0
+      z_start_um: 0.0
+    top_metal:
+      material: "copper"
+      thickness_variable: "H"
+      z_start_um: 3.0
+
+device:
+  type: "spiral_inductor"
+  topology: "square_spiral"
+  turns: 3
+  turns_is_optimization_variable: false
+  port_style: "two_port_lumped"
+  port_count: 2
+  fixed_features:
+    underpass: false
+    ground_plane: false
+    passivation: false
+  geometry_rules:
+    min_inner_opening_rule: "Din > 2 * (W + S)"
+    trace_width_variable: "W"
+    trace_spacing_variable: "S"
+    inner_diameter_variable: "Din"
+    metal_thickness_variable: "H"
+
+variables:
+  Din:
+    label: "inner_diameter"
+    unit: "um"
+    default: 60.0
+    min: 50.0
+    max: 70.0
+    optimize: true
+  W:
+    label: "trace_width"
+    unit: "um"
+    default: 15.0
+    min: 12.0
+    max: 18.0
+    optimize: true
+  S:
+    label: "trace_spacing"
+    unit: "um"
+    default: 1.5
+    min: 1.0
+    max: 2.0
+    optimize: true
+  H:
+    label: "top_metal_thickness"
+    unit: "um"
+    default: 2.0
+    min: 2.0
+    max: 2.0
+    optimize: false
+
+hfss:
+  solution_type: "DrivenModal"
+  model_units: "um"
+  solution_frequency: "5GHz"
+  air_box_padding_um: 200.0
+  radiation_boundary: true
+  sweep:
+    sweep_type: "interpolating"
+    sweep_data: "LINC 0.1GHz 30GHz 601"
+    export_touchstone: true
+    touchstone_ports: 2
