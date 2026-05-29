@@ -2,7 +2,6 @@
 A parser to parse the touchstone file format and store the data in a pandas DataFrame.
 """
 
-from curses.ascii import isspace
 import re
 import pandas as pd
 

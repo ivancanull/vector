@@ -1,0 +1,185 @@
+schema_version: 1
+source_case_pool: skills/hfss-rf-skill/experiments/public_hfss_validation_cases.yaml
+methods:
+  - baseline
+  - current_skill
+  - improved_skill
+  - reference
+seeds:
+  pilot: [0, 1, 2]
+  full: [0, 1, 2, 3, 4]
+budgets:
+  smoke_hfss_calls: 8
+  pilot_hfss_calls: 20
+  full_hfss_calls: 80
+protocol:
+  max_attempts: 2
+  max_repairs: 1
+  true_value_source: "real HFSS solve result extracted from Touchstone or field report"
+  primary_time_axis: "hfss_call_count"
+  secondary_time_axis: "wall_clock_sec"
+  compare_by:
+    - median_final_true_objective
+    - median_calls_to_target
+    - median_wall_clock_time_to_target
+    - area_under_best_so_far_curve
+    - solve_export_success_rate
+    - failure_adjusted_score
+selected_cases:
+  - id: dipole_antenna_return_loss
+    layer: case_reproduction
+    task_family: antenna
+    prompt_goal: "Generate a PyAEDT HFSS workflow for a center-fed dipole and verify S11 near resonance."
+    design_variables:
+      - name: arm_length_mm
+        min: 20.0
+        max: 45.0
+      - name: wire_radius_mm
+        min: 0.2
+        max: 1.0
+      - name: feed_gap_mm
+        min: 0.5
+        max: 3.0
+    objective:
+      name: min_s11_db_near_resonance
+      direction: minimize
+      target_threshold: -10.0
+      unit: dB
+    verifier_rules:
+      - syntax_import_pass
+      - radiation_boundary_exists
+      - driven_modal_setup_exists
+      - s11_report_or_touchstone_exists
+
+  - id: probe_fed_patch_antenna_s11
+    layer: case_reproduction
+    task_family: antenna
+    prompt_goal: "Generate a probe-fed rectangular patch antenna with substrate, ground, radiation region, and S11 verification."
+    design_variables:
+      - name: patch_length_mm
+        min: 20.0
+        max: 45.0
+      - name: patch_width_mm
+        min: 25.0
+        max: 55.0
+      - name: feed_offset_mm
+        min: 1.0
+        max: 12.0
+      - name: substrate_height_mm
+        min: 0.8
+        max: 3.2
+    objective:
+      name: min_s11_db_near_design_band
+      direction: minimize
+      target_threshold: -8.0
+      unit: dB
+    verifier_rules:
+      - patch_ground_substrate_exist
+      - feed_port_exists
+      - radiation_boundary_exists
+      - s11_report_or_touchstone_exists
+
+  - id: spiral_inductor_l_q
+    layer: closed_loop_optimization
+    task_family: passive_rf_device
+    prompt_goal: "Generate a parameterized spiral inductor workflow and optimize for finite positive Q with target inductance sanity."
+    design_variables:
+      - name: inner_diameter_um
+        min: 50.0
+        max: 80.0
+      - name: trace_width_um
+        min: 8.0
+        max: 20.0
+      - name: spacing_um
+        min: 1.0
+        max: 4.0
+      - name: metal_thickness_um
+        min: 1.0
+        max: 4.0
+    objective:
+      name: spiral_failure_adjusted_l_q_score
+      direction: minimize
+      target_threshold: 0.0
+      unit: penalty
+    verifier_rules:
+      - variables_are_parameterized
+      - two_ports_exist
+      - touchstone_file_exists
+      - l_q_metrics_finite
+
+  - id: coaxial_line_multiphysics_sparams
+    layer: closed_loop_optimization
+    task_family: transmission_line
+    prompt_goal: "Generate a coaxial line HFSS workflow and tune geometry toward matched 50-ohm S-parameter behavior."
+    design_variables:
+      - name: inner_radius_mm
+        min: 0.2
+        max: 1.5
+      - name: outer_radius_mm
+        min: 1.8
+        max: 6.0
+      - name: dielectric_er
+        min: 1.0
+        max: 4.0
+      - name: line_length_mm
+        min: 20.0
+        max: 100.0
+    objective:
+      name: coax_match_penalty
+      direction: minimize
+      target_threshold: 0.0
+      unit: penalty
+    verifier_rules:
+      - concentric_conductors_exist
+      - two_ports_exist
+      - touchstone_file_exists
+      - characteristic_impedance_reasonable
+
+  - id: inductive_iris_waveguide_filter_sparams
+    layer: closed_loop_optimization
+    task_family: filter
+    prompt_goal: "Generate an inductive iris waveguide filter and optimize passband insertion loss with rejection sanity checks."
+    design_variables:
+      - name: waveguide_width_mm
+        min: 15.0
+        max: 30.0
+      - name: waveguide_height_mm
+        min: 6.0
+        max: 15.0
+      - name: iris_width_mm
+        min: 1.0
+        max: 8.0
+      - name: cavity_length_mm
+        min: 5.0
+        max: 30.0
+    objective:
+      name: filter_sparameter_penalty
+      direction: minimize
+      target_threshold: 0.0
+      unit: penalty
+    verifier_rules:
+      - two_wave_ports_exist
+      - driven_modal_setup_exists
+      - touchstone_file_exists
+      - passband_and_stopband_metrics_exist
+
+  - id: patch_antenna_3d_component_reuse
+    layer: case_reproduction
+    task_family: component_reuse
+    prompt_goal: "Generate a workflow that exports a patch antenna as a 3D component and reinserts it into a target design."
+    design_variables:
+      - name: component_count
+        min: 1
+        max: 4
+      - name: placement_pitch_mm
+        min: 20.0
+        max: 80.0
+    objective:
+      name: component_reuse_failure_adjusted_score
+      direction: minimize
+      target_threshold: 0.0
+      unit: penalty
+    verifier_rules:
+      - inserted_component_count_matches
+      - component_placement_error_bounded
+      - ports_or_metadata_preserved

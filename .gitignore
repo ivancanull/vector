@@ -201,6 +201,18 @@ plot_utils.py
 
 # experiment artifacts
 experiments/
+!experiments/
+!/experiments/hfss_skill_playground/
+!/experiments/hfss_skill_playground/README.md
+!/experiments/hfss_skill_playground/cases.yaml
+!/experiments/hfss_skill_playground/failure_taxonomy.yaml
+!/experiments/hfss_skill_playground/scripts/
+!/experiments/hfss_skill_playground/scripts/**
+/experiments/hfss_skill_playground/scripts/__pycache__/
+/experiments/hfss_skill_playground/scripts/*.pyc
+/experiments/hfss_skill_playground/runs/
+/experiments/hfss_skill_playground/summary.csv
+/experiments/hfss_skill_playground/*.generated.md
 
 # legacy scripts
 scripts/legacy/

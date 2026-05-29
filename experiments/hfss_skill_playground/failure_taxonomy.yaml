@@ -1,0 +1,46 @@
+schema_version: 1
+failure_types:
+  - id: syntax_error
+    category: static
+    description: "Generated Python cannot parse."
+    penalty: 1000.0
+  - id: import_error
+    category: static
+    description: "PyAEDT or project imports fail."
+    penalty: 900.0
+  - id: incomplete_workflow
+    category: static
+    description: "Missing project, geometry, setup, sweep, solve, export, or evaluation step."
+    penalty: 800.0
+  - id: geometry_failure
+    category: hfss_build
+    description: "Geometry cannot be created or is physically inconsistent."
+    penalty: 700.0
+  - id: port_assignment_failure
+    category: hfss_build
+    description: "Ports, terminals, references, or integration lines are missing or invalid."
+    penalty: 650.0
+  - id: boundary_failure
+    category: hfss_build
+    description: "Radiation, periodic, Floquet, waveguide, or SBR boundaries are missing or invalid."
+    penalty: 600.0
+  - id: setup_failure
+    category: hfss_setup
+    description: "Setup or sweep cannot be created, solved, or matched to export names."
+    penalty: 550.0
+  - id: solve_failure
+    category: hfss_solve
+    description: "HFSS solve fails or times out."
+    penalty: 500.0
+  - id: export_failure
+    category: artifact
+    description: "Expected Touchstone, report, field, or component artifact is missing."
+    penalty: 400.0
+  - id: metric_extraction_failure
+    category: evaluation
+    description: "Artifact exists but objective, S-parameters, L/Q, far-field, or mode metrics cannot be extracted."
+    penalty: 300.0
+  - id: target_not_reached
+    category: optimization
+    description: "Run completes but does not reach the target threshold within budget."
+    penalty: 100.0
