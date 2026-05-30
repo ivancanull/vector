@@ -73,18 +73,33 @@ def test_spiral_builder_calls_fake_pyaedt_in_expected_order() -> None:
     variable_events = [event for event in events if event[0] == "variable"]
     assert [event[1] for event in variable_events] == ["Din", "W", "S", "H"]
 
-    first_geometry_idx = next(i for i, event in enumerate(events) if event[0] == "create_polyline")
+    first_geometry_idx = next(
+        i
+        for i, event in enumerate(events)
+        if event[0] == "create_box" and event[3].get("name") == "SpiralTraceSegment1"
+    )
     last_variable_idx = max(i for i, event in enumerate(events) if event[0] == "variable")
     assert last_variable_idx < first_geometry_idx
 
-    polyline_event = events[first_geometry_idx]
-    assert polyline_event[2]["xsection_width"] == "W"
-    assert polyline_event[2]["xsection_height"] == "H"
-    assert "Din/2" in str(polyline_event[1])
+    trace_event = events[first_geometry_idx]
+    assert trace_event[3]["material"] == "copper"
+    assert "Din/2" in str(trace_event)
 
     port_events = [event for event in events if event[0] == "lumped_port"]
     assert [event[1]["name"] for event in port_events] == ["Port1", "Port2"]
+    assert all(event[1]["create_port_sheet"] is False for event in port_events)
+    for event in port_events:
+        start, end = event[1]["integration_line"]
+        assert start != end
+        assert sum(1 for lhs, rhs in zip(start, end) if lhs != rhs) == 1
     assert any(event[0] == "radiation" for event in events)
+    assert any(
+        event[0] == "unite"
+        and "SpiralTraceSegment1" in event[1]
+        and "InnerTerminalPad" in event[1]
+        and "InnerBridgeTrace" in event[1]
+        for event in events
+    )
     assert any(event[0] == "frequency_sweep" and event[1]["name"] == "Sweep" for event in events)
 
 
@@ -109,6 +124,29 @@ def test_spiral_generator_saves_project_with_fake_factory(tmp_path: Path) -> Non
     assert generated == tmp_path / "spiral_inductor_template_v1.aedt"
     assert events[-2] == ("save_project", str(tmp_path / "spiral_inductor_template_v1.aedt"))
     assert events[-1] == ("release_desktop", False)
+
+
+def test_spiral_generator_overwrite_removes_existing_project_artifacts(tmp_path: Path) -> None:
+    definition = SpiralTemplateDeviceDefinition.load(DEVICE_DEFINITION)
+    project_path = tmp_path / "spiral_inductor_template_v1.aedt"
+    definition = replace(
+        definition,
+        template_output=replace(definition.template_output, project_path=project_path),
+    )
+    project_path.write_text("old", encoding="utf-8")
+    project_path.with_name(project_path.name + ".auto").write_text("old", encoding="utf-8")
+    project_path.with_name(project_path.name + ".lock").write_text("old", encoding="utf-8")
+    project_path.with_name(project_path.name + "results").mkdir()
+    fake_hfss = FakeHfss([])
+
+    PyAEDTSpiralTemplateGenerator(hfss_factory=FakeHfssFactory(fake_hfss)).generate(
+        definition,
+        overwrite=True,
+    )
+
+    assert not project_path.with_name(project_path.name + ".auto").exists()
+    assert not project_path.with_name(project_path.name + ".lock").exists()
+    assert not project_path.with_name(project_path.name + "results").exists()
 
 
 def test_generate_cli_dry_run_does_not_import_pyaedt() -> None:
@@ -150,6 +188,7 @@ def test_touchstone_debug_extractor_returns_nominal_metrics(tmp_path: Path) -> N
     assert metrics.l_at_target_nh is not None
     assert metrics.q_at_target is not None
     assert metrics.srf_ghz is not None
+    assert metrics.s21_at_target_db is not None
 
 
 class FakeMaterial:
@@ -192,6 +231,10 @@ class FakeModeler:
         self.events.append(("create_rectangle", orientation, origin, sizes, kwargs))
         return kwargs.get("name", "Rectangle")
 
+    def unite(self, assignments):
+        self.events.append(("unite", assignments))
+        return True
+
 
 class FakeSweep:
     pass
@@ -221,6 +264,7 @@ class FakeHfss(dict):
         self.modeler = FakeModeler(events)
         self.materials = FakeMaterials(events)
         self.setups: list[FakeSetup] = []
+        self.solution_type = "DrivenModal"
 
     def __setitem__(self, key, value) -> None:
         self.events.append(("variable", key, value))
@@ -239,6 +283,10 @@ class FakeHfss(dict):
     def assign_radiation_boundary_to_objects(self, assignment, **kwargs):
         self.events.append(("radiation", assignment, kwargs))
         return kwargs.get("name", "Rad1")
+
+    def assign_perfecte_to_sheets(self, assignment, **kwargs):
+        self.events.append(("perfect_e", assignment, kwargs))
+        return kwargs.get("name", "PerfE_Ground")
 
     def save_project(self, path: str) -> None:
         self.events.append(("save_project", path))

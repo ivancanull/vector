@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -17,6 +18,9 @@ from worker.utils import WorkerError
 
 
 REQUIRED_SPIRAL_VARIABLES = ("Din", "W", "S", "H")
+FEED_EXTENSION_WIDTHS = 4
+INNER_BRIDGE_CLEARANCE_UM = 2.0
+SPIRAL_PORT_STRATEGY = "driven_modal_gap_ports_extended_feed"
 
 
 @dataclass(frozen=True)
@@ -304,19 +308,22 @@ class SpiralGeometry:
         z = self.top_metal_center_z_expr()
         radii = [self.radius_expr(i) for i in reversed(range(self.definition.device.turns))]
         outer = radii[0]
-        points: list[list[str]] = [[f"{outer} + 2*W", f"-({outer})", z], [outer, f"-({outer})", z]]
+        points: list[list[str]] = [
+            [f"{outer} + {FEED_EXTENSION_WIDTHS}*W", _neg_expr(outer), z],
+            [outer, _neg_expr(outer), z],
+        ]
 
         for idx, radius in enumerate(radii):
             points.extend(
                 [
-                    [f"-({radius})", f"-({radius})", z],
-                    [f"-({radius})", radius, z],
+                    [_neg_expr(radius), _neg_expr(radius), z],
+                    [_neg_expr(radius), radius, z],
                     [radius, radius, z],
                 ]
             )
             if idx + 1 < len(radii):
                 next_radius = radii[idx + 1]
-                points.append([radius, f"-({next_radius})", z])
+                points.append([radius, _neg_expr(next_radius), z])
         return points
 
     def radius_expr(self, turn_index_from_inner: int) -> str:
@@ -365,6 +372,8 @@ class SpiralTemplateBuilder:
         self._create_stackup(hfss)
         self._create_spiral_trace(hfss)
         self._create_terminal_pads(hfss)
+        self._create_inner_feed_bridge(hfss)
+        self._unite_spiral_conductor(hfss)
         self._create_ports(hfss)
         self._create_air_box_and_boundary(hfss)
         self._ensure_setup_and_sweep(hfss)
@@ -422,19 +431,46 @@ class SpiralTemplateBuilder:
                 material=material_name,
             )
 
+    def _create_ground_reference(self, hfss) -> None:
+        modeler = hfss.modeler
+        lateral_um = self._model_lateral_size_um()
+        half_um = lateral_um / 2.0
+        substrate = _as_mapping(self.definition.pdk.stackup["substrate"], "pdk.stackup.substrate")
+        ground = modeler.create_rectangle(
+            "XY",
+            [_um(-half_um), _um(-half_um), _um(float(substrate["z_start_um"]))],
+            [_um(lateral_um), _um(lateral_um)],
+            name="Ground",
+        )
+        assign_perfect_e = getattr(hfss, "assign_perfecte_to_sheets", None)
+        if callable(assign_perfect_e):
+            assign_perfect_e(ground, name="PerfE_Ground")
+
     def _create_spiral_trace(self, hfss) -> None:
         modeler = hfss.modeler
-        modeler.create_polyline(
-            self.geometry.centerline_points(),
-            segment_type="Line",
-            name="SpiralTrace",
-            material=self._top_metal_material_name(),
-            xsection_type="Rectangle",
-            xsection_orient="Z",
-            xsection_width="W",
-            xsection_height="H",
-            xsection_bend_type="Corner",
-        )
+        material = self._top_metal_material_name()
+        z = self.geometry.top_metal_start_z_expr()
+        points = self.geometry.centerline_points()
+        for idx, (start, stop) in enumerate(zip(points, points[1:]), start=1):
+            name = f"SpiralTraceSegment{idx}"
+            if start[1] == stop[1]:
+                x_min, x_max = self._ordered_expr_pair(start[0], stop[0])
+                modeler.create_box(
+                    [x_min, f"({start[1]}) - W/2", z],
+                    [f"({x_max}) - ({x_min})", "W", "H"],
+                    name=name,
+                    material=material,
+                )
+            elif start[0] == stop[0]:
+                y_min, y_max = self._ordered_expr_pair(start[1], stop[1])
+                modeler.create_box(
+                    [f"({start[0]}) - W/2", y_min, z],
+                    ["W", f"({y_max}) - ({y_min})", "H"],
+                    name=name,
+                    material=material,
+                )
+            else:
+                raise WorkerError("geometry_failure", f"Spiral segment is not axis-aligned: {start} -> {stop}")
 
     def _create_terminal_pads(self, hfss) -> None:
         modeler = hfss.modeler
@@ -442,48 +478,174 @@ class SpiralTemplateBuilder:
         inner = self.geometry.radius_expr(0)
         z = self.geometry.top_metal_start_z_expr()
         material = self._top_metal_material_name()
-        modeler.create_box([outer, f"-({outer}) - W/2", z], ["2*W", "W", "H"], name="OuterTerminalPad", material=material)
+        modeler.create_box(
+            [outer, f"-({outer}) - W/2", z],
+            [f"{FEED_EXTENSION_WIDTHS}*W", "W", "H"],
+            name="OuterTerminalPad",
+            material=material,
+        )
         modeler.create_box([f"{inner} - W/2", f"{inner} - W/2", z], ["W", "W", "H"], name="InnerTerminalPad", material=material)
+
+    def _create_inner_feed_bridge(self, hfss) -> None:
+        modeler = hfss.modeler
+        outer = self.geometry.radius_expr(self.definition.device.turns - 1)
+        inner = self.geometry.radius_expr(0)
+        z0 = self.geometry.top_metal_start_z_expr()
+        bridge_z = f"{z0} + H + {_um(INNER_BRIDGE_CLEARANCE_UM)}"
+        material = self._top_metal_material_name()
+        modeler.create_box(
+            [f"{inner} - W/2", f"{inner} - W/2", z0],
+            ["W", "W", f"H + {_um(INNER_BRIDGE_CLEARANCE_UM)}"],
+            name="InnerBridgeVia",
+            material=material,
+        )
+        modeler.create_box(
+            [inner, f"{inner} - W/2", bridge_z],
+            [f"({outer} + {FEED_EXTENSION_WIDTHS}*W) - ({inner})", "W", "H"],
+            name="InnerBridgeTrace",
+            material=material,
+        )
+
+    def _unite_spiral_conductor(self, hfss) -> None:
+        unite = getattr(hfss.modeler, "unite", None)
+        if callable(unite):
+            unite(
+                [
+                    *(f"SpiralTraceSegment{idx}" for idx in range(1, len(self.geometry.centerline_points()))),
+                    "OuterTerminalPad",
+                    "InnerTerminalPad",
+                    "InnerBridgeVia",
+                    "InnerBridgeTrace",
+                ]
+            )
+
+    def _ordered_expr_pair(self, first: str, second: str) -> tuple[str, str]:
+        first_value = self._nominal_expr_value(first)
+        second_value = self._nominal_expr_value(second)
+        return (first, second) if first_value <= second_value else (second, first)
+
+    def _nominal_expr_value(self, expr: str) -> float:
+        text = expr.replace("um", "")
+        for name, variable in self.definition.variables.items():
+            text = text.replace(name, str(variable.default))
+        return float(eval(text, {"__builtins__": {}}, {}))
 
     def _create_ports(self, hfss) -> None:
         modeler = hfss.modeler
         outer = self.geometry.radius_expr(self.definition.device.turns - 1)
         inner = self.geometry.radius_expr(0)
         z = self.geometry.top_metal_start_z_expr()
+        bridge_z = f"{z} + H + {_um(INNER_BRIDGE_CLEARANCE_UM)}"
+        zc = self.geometry.top_metal_center_z_expr()
+        bridge_zc = f"{bridge_z} + H/2"
+        port1_line, port2_line = self._nominal_port_integration_lines()
         port1 = modeler.create_rectangle(
-            "YZ",
-            [f"{outer} + 2*W", f"-({outer}) - W/2", z],
-            ["W", "H"],
+            "XY",
+            [f"{outer} + {FEED_EXTENSION_WIDTHS}*W", f"{_neg_expr(outer)} - W/2", zc],
+            ["W", "W"],
             name="Port1Sheet",
+            material="vacuum",
+        )
+        modeler.create_box(
+            [f"{outer} + {FEED_EXTENSION_WIDTHS + 1}*W", f"{_neg_expr(outer)} - W/2", z],
+            [
+                "W",
+                f"({inner} + W/2) - ({_neg_expr(outer)} - W/2)",
+                f"H + {_um(INNER_BRIDGE_CLEARANCE_UM)} + H",
+            ],
+            name="PortReferenceRail",
+            material="pec",
+        )
+        port2 = modeler.create_rectangle(
+            "XY",
+            [f"{outer} + {FEED_EXTENSION_WIDTHS}*W", f"{inner} - W/2", bridge_zc],
+            ["W", "W"],
+            name="Port2Sheet",
             material="vacuum",
         )
         self._assign_lumped_port(
             hfss,
             name="Port1",
             sheet=port1,
-            integration_line=[
-                [f"{outer} + 2*W", f"-({outer}) - W/2", z],
-                [f"{outer} + 2*W", f"-({outer}) + W/2", z],
-            ],
-        )
-        port2 = modeler.create_rectangle(
-            "YZ",
-            [f"{inner} + W/2", f"{inner} - W/2", z],
-            ["W", "H"],
-            name="Port2Sheet",
-            material="vacuum",
+            integration_line=port1_line,
         )
         self._assign_lumped_port(
             hfss,
             name="Port2",
             sheet=port2,
-            integration_line=[
-                [f"{inner} + W/2", f"{inner} - W/2", z],
-                [f"{inner} + W/2", f"{inner} + W/2", z],
+            integration_line=port2_line,
+        )
+
+    def _nominal_port_integration_lines(self) -> tuple[list[list[str]], list[list[str]]]:
+        din = self.definition.variables["Din"].default
+        width = self.definition.variables["W"].default
+        spacing = self.definition.variables["S"].default
+        height = self.definition.variables["H"].default
+        turns = self.definition.device.turns
+        outer = din / 2.0 + width / 2.0 + (turns - 1) * (width + spacing)
+        inner = din / 2.0 + width / 2.0
+        z0 = float(_as_mapping(self.definition.pdk.stackup["top_metal"], "pdk.stackup.top_metal")["z_start_um"])
+        zc = z0 + height / 2.0
+        bridge_zc = z0 + height + INNER_BRIDGE_CLEARANCE_UM + height / 2.0
+        return (
+            [
+                [_um(outer + FEED_EXTENSION_WIDTHS * width), _um(-outer), _um(zc)],
+                [_um(outer + (FEED_EXTENSION_WIDTHS + 1) * width), _um(-outer), _um(zc)],
+            ],
+            [
+                [_um(outer + FEED_EXTENSION_WIDTHS * width), _um(inner), _um(bridge_zc)],
+                [_um(outer + (FEED_EXTENSION_WIDTHS + 1) * width), _um(inner), _um(bridge_zc)],
             ],
         )
 
-    def _assign_lumped_port(self, hfss, *, name: str, sheet, integration_line: list[list[str]]) -> None:
+    def _assign_lumped_port(
+        self,
+        hfss,
+        *,
+        name: str,
+        sheet,
+        integration_line: list[list[str]],
+        reference: str | None = None,
+    ) -> None:
+        solution_type = str(getattr(hfss, "solution_type", self.definition.hfss.solution_type))
+        if "Terminal" in solution_type:
+            lumped_port = getattr(hfss, "lumped_port", None)
+            if not callable(lumped_port):
+                raise WorkerError("geometry_failure", "PyAEDT HFSS object has no lumped_port method")
+            lumped_port(
+                assignment=sheet,
+                reference=[reference] if reference else None,
+                create_port_sheet=False,
+                impedance=50,
+                name=name,
+            )
+            return
+        create_boundary = getattr(hfss, "_create_boundary", None)
+        if callable(create_boundary):
+            sheet_name = getattr(sheet, "name", sheet)
+            create_boundary(
+                name,
+                {
+                    "Objects": [str(sheet_name)],
+                    "DoDeembed": False,
+                    "RenormalizeAllTerminals": True,
+                    "Modes": {
+                        "Mode1": {
+                            "ModeNum": 1,
+                            "UseIntLine": True,
+                            "IntLine": {"Start": integration_line[0], "End": integration_line[1]},
+                            "AlignmentGroup": 0,
+                            "CharImp": "Zpi",
+                            "RenormImp": "50ohm",
+                        }
+                    },
+                    "ShowReporterFilter": False,
+                    "ReporterFilter": [True],
+                    "Impedance": "50ohm",
+                },
+                "Lumped Port",
+            )
+            return
         lumped_port = getattr(hfss, "lumped_port", None)
         if not callable(lumped_port):
             raise WorkerError("geometry_failure", "PyAEDT HFSS object has no lumped_port method")
@@ -564,6 +726,8 @@ class PyAEDTSpiralTemplateGenerator:
         project_path = definition.template_output.project_path
         if project_path.exists() and not overwrite:
             raise FileExistsError(f"Template already exists, pass --overwrite to replace: {project_path}")
+        if overwrite:
+            self._remove_existing_project_artifacts(project_path)
         import_check = getattr(self.hfss_factory, "import_hfss_class", None)
         if callable(import_check):
             import_check()
@@ -587,6 +751,18 @@ class PyAEDTSpiralTemplateGenerator:
             release = getattr(hfss, "release_desktop", None)
             if callable(release):
                 release(close_projects=False, close_desktop=close_desktop)
+
+    def _remove_existing_project_artifacts(self, project_path: Path) -> None:
+        for path in (
+            project_path,
+            project_path.with_name(project_path.name + ".auto"),
+            project_path.with_name(project_path.name + ".lock"),
+            project_path.with_name(project_path.name + "results"),
+        ):
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
 
 
 class PyAEDTHfssFactory:
@@ -625,12 +801,14 @@ class SpiralDebugMetrics:
     l_at_target_nh: float | None
     q_at_target: float | None
     srf_ghz: float | None
+    s21_at_target_db: float | None
 
     def to_json_dict(self, *, target_ghz: float) -> dict[str, float | None | list[float]]:
         return {
             "freq_range_ghz": [self.freq_range_ghz[0], self.freq_range_ghz[1]],
             f"l_at_{_fmt_number(target_ghz)}ghz_nh": self.l_at_target_nh,
             f"q_at_{_fmt_number(target_ghz)}ghz": self.q_at_target,
+            f"s21_at_{_fmt_number(target_ghz)}ghz_db": self.s21_at_target_db,
             "srf_ghz": self.srf_ghz,
         }
 
@@ -664,11 +842,14 @@ class SpiralTouchstoneMetricsExtractor:
         inductance_h = np.imag(zdiff) / (2.0 * np.pi * freqs_hz)
         q_values = np.imag(zdiff) / np.real(zdiff)
         target_idx = int(np.argmin(np.abs(freqs_hz - target_ghz * 1e9)))
+        s21_mag = float(abs(s_params[target_idx, 1, 0]))
+        s21_db = None if s21_mag <= 0.0 else 20.0 * math.log10(s21_mag)
         return SpiralDebugMetrics(
             freq_range_ghz=(float(freqs_hz[0] / 1e9), float(freqs_hz[-1] / 1e9)),
             l_at_target_nh=_finite_or_none(float(inductance_h[target_idx] * 1e9)),
             q_at_target=_finite_or_none(float(q_values[target_idx])),
             srf_ghz=_first_positive_to_negative_crossing_ghz(freqs_hz, np.imag(zdiff)),
+            s21_at_target_db=_finite_or_none(s21_db) if s21_db is not None else None,
         )
 
 
@@ -721,13 +902,19 @@ class SpiralTemplateDebugger:
             exported = session.export_touchstone(resolved_setup.setup_name, resolved_setup.sweep_name, output_touchstone)
             metrics = self.extractor.extract(exported, target_ghz=target_ghz)
             nominal = definition.nominal_estimate(f0_ghz=target_ghz)
+            l_error_pct = None
+            if metrics.l_at_target_nh is not None and nominal.inductance_nh != 0.0:
+                l_error_pct = abs(metrics.l_at_target_nh - nominal.inductance_nh) / nominal.inductance_nh * 100.0
             result = {
                 "status": "done",
                 "template": definition.template_output.template_name,
                 "aedt": str(aedt_path),
                 "variables": definition.nominal_variables(),
                 **metrics.to_json_dict(target_ghz=target_ghz),
+                "l_error_pct": l_error_pct,
                 "mohan_estimate_nh": nominal.inductance_nh,
+                "port_strategy": SPIRAL_PORT_STRATEGY,
+                "q_positive": metrics.q_at_target is not None and metrics.q_at_target > 0.0,
             }
             debug_json = output_touchstone.with_suffix(".json")
             debug_json.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
@@ -749,6 +936,10 @@ def _fmt_number(value: float) -> str:
 
 def _um(value: float) -> str:
     return f"{_fmt_number(value)}um"
+
+
+def _neg_expr(value: str) -> str:
+    return f"(-1*{value})"
 
 
 def _camel(value: str) -> str:
