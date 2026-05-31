@@ -202,6 +202,7 @@ plot_utils.py
 # experiment artifacts
 experiments/
 !experiments/
+/experiments/**/*.json
 !/experiments/hfss_skill_playground/
 !/experiments/hfss_skill_playground/README.md
 !/experiments/hfss_skill_playground/cases.yaml
@@ -220,3 +221,6 @@ scripts/legacy/
 # local ARIS/Codex project install
 .agents/
 AGENTS.md
+
+# local run notes
+TMUX_JUPYTER_CHEATSHEET.md

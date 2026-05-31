@@ -5,19 +5,19 @@ under `experiments/` as the data-generation source of truth.
 
 ## Current Online Protocol
 
-| Setting | BO | LHS | BNN online |
-|---|---|---|---|
-| Notebook | `notebooks/bo_online_experiment.ipynb` | `notebooks/lhs_online_experiment.ipynb` | `notebooks/bnn_online_experiment.ipynb` |
-| Optimizer | `OptimizerBoTorch` | `OptimizerLHSRandom` | `OptimizerBoTorch` |
-| Selection | GP qLogEI | LHS random sequence | BNN response qLogEI |
-| Simulator | `ServerQueueSimulator` | `ServerQueueSimulator` | `ServerQueueSimulator` |
-| Candidate space | `ContinuousCandidateSpace` | `ContinuousCandidateSpace` | `ContinuousCandidateSpace` |
-| Pool size | `1500` | `1500` | `1500` |
-| Seeds | `[0, 1, 2, 3, 4]` | `[0, 1, 2, 3, 4]` | `[0, 1, 2, 3, 4]` |
-| Target trials | `80` | `80` | `80` |
-| Output root | `experiments/bo_online_general/` | `experiments/lhs_online_general/` | `experiments/bnn_online_general/` |
+| Setting | BO | LHS | Turbo | BNN online |
+|---|---|---|---|---|
+| Notebook | `notebooks/bo_online_experiment.ipynb` | `notebooks/lhs_online_experiment.ipynb` | `notebooks/turbo_online_experiment.ipynb` | `notebooks/bnn_online_experiment.ipynb` |
+| Optimizer | `OptimizerBoTorch` | `OptimizerLHSRandom` | `OptimizerBoTorch` with trust-region selection | `OptimizerBoTorch` |
+| Selection | GP logEI | LHS random sequence | trust-region GP logEI | BNN response logEI |
+| Simulator | `ServerQueueSimulator` | `ServerQueueSimulator` | `ServerQueueSimulator` | `ServerQueueSimulator` |
+| Candidate space | `ContinuousCandidateSpace` | `ContinuousCandidateSpace` | `ContinuousCandidateSpace` | `ContinuousCandidateSpace` |
+| Pool size | `1500` | `1500` | `1500` | `1500` |
+| Seeds | `[0, 1, 2, 3, 4]` | `[0, 1, 2, 3, 4]` | `[0, 1, 2, 3, 4]` | `[0, 1, 2, 3, 4]` |
+| Target trials | `80` | `80` | `80` | `80` |
+| Output root | `experiments/bo_online_general/` | `experiments/lhs_online_general/` | `experiments/turbo_online_general/` | `experiments/bnn_online_general/` |
 
-All three online families use the current BCLF target in
+All four online families use the current BCLF target in
 [BCLF Optimization Target And Online Settings](../bclf_optimization_target.md).
 The optimizer minimizes scalar objective; lower `best_so_far` is better.
 
@@ -30,7 +30,7 @@ The optimizer minimizes scalar objective; lower `best_so_far` is better.
 
 ### Research Question
 
-Can GP qLogEI operate as a queue-backed online baseline for BCLF optimization
+Can GP logEI operate as a queue-backed online baseline for BCLF optimization
 under the current target and 80-trial seed budget?
 
 ### Setup
@@ -61,7 +61,7 @@ the completion gate.
 ## Experiment Card: LHS Online Baseline
 
 - experiment_id: `lhs_online_general_v1`
-- status: `draft`
+- status: `paper-candidate`
 - primary notebook: `notebooks/lhs_online_experiment.ipynb`
 - output root: `experiments/lhs_online_general/`
 
@@ -74,19 +74,17 @@ candidate-space, simulator, and per-seed budget contract as BO?
 
 - Method label: `lhs_random`
 - Total budget: `80` trials per seed
-- Current completed summary rows: seeds `0, 1, 2`
+- Seeds included now: `0, 1, 2, 3, 4`
 - Completion gate: `status == completed` and `num_trials >= 80`
 
 ### Current Reportable Result
 
-From `experiments/lhs_online_general/campaign_summary.csv`, 3 seeds currently
-satisfy the completion gate. This is a partial online baseline and should not be
-used as a final fair comparison against BO until the configured seed set is
-complete or the paper explicitly labels the comparison as partial.
+From `experiments/lhs_online_general/campaign_summary.csv`, all 5 seeds satisfy
+the completion gate.
 
-| Completed seeds | Median final best | Mean final best | Best seed result | Worst seed result |
+| Seeds | Median final best | Mean final best | Best seed result | Worst seed result |
 |---:|---:|---:|---:|---:|
-| 3 | -19.162 | -20.206 | -25.141 | -16.314 |
+| 5 | -19.162 | -18.815 | -25.141 | -9.847 |
 
 ### Evidence Artifacts
 
@@ -94,6 +92,88 @@ complete or the paper explicitly labels the comparison as partial.
 - `experiments/lhs_online_general/lhs_online_general_seed0.json`
 - `experiments/lhs_online_general/lhs_online_general_seed1.json`
 - `experiments/lhs_online_general/lhs_online_general_seed2.json`
+- `experiments/lhs_online_general/lhs_online_general_seed3.json`
+- `experiments/lhs_online_general/lhs_online_general_seed4.json`
+
+## Experiment Card: Turbo Online Baseline
+
+- experiment_id: `turbo_online_general_v1`
+- status: `paper-candidate`
+- primary notebook: `notebooks/turbo_online_experiment.ipynb`
+- output root: `experiments/turbo_online_general/`
+
+### Research Question
+
+Does a trust-region GP logEI policy improve online BCLF optimization relative
+to the global BO and LHS baselines under the same 80-trial seed budget?
+
+### Setup
+
+- Method label: `trust_region_gp_qlogei`
+- `N_INIT = 30`, `BUDGET = 50`, total `80` trials per seed
+- Seeds included now: `0, 1, 2, 3, 4`
+- Completion gate: `status == completed` and `num_trials >= 80`
+
+### Current Reportable Result
+
+From `experiments/turbo_online_general/campaign_summary.csv`, all 5 seeds
+satisfy the completion gate.
+
+| Seeds | Median final best | Mean final best | Best seed result | Worst seed result |
+|---:|---:|---:|---:|---:|
+| 5 | -19.161 | -17.524 | -22.517 | -9.206 |
+
+### Evidence Artifacts
+
+- `experiments/turbo_online_general/campaign_summary.csv`
+- `experiments/turbo_online_general/turbo_online_general_seed0.json`
+- `experiments/turbo_online_general/turbo_online_general_seed1.json`
+- `experiments/turbo_online_general/turbo_online_general_seed2.json`
+- `experiments/turbo_online_general/turbo_online_general_seed3.json`
+- `experiments/turbo_online_general/turbo_online_general_seed4.json`
+
+## Experiment Card: BO/LHS/Turbo Online Comparison
+
+- experiment_id: `bo_lhs_turbo_online_comparison_v1`
+- status: `paper-candidate`
+- primary notebook: `notebooks/bo_lhs_online_comparison.ipynb`
+- output root: `experiments/bo_lhs_turbo_online_comparison/`
+
+### Research Question
+
+Do the current surrogate-assisted BO/Turbo policies outperform the model-free
+LHS baseline under the same completed five-seed online protocol?
+
+### Setup
+
+- Methods: BO `global_gp_qlogei`, LHS `lhs_random`, Turbo `trust_region_gp_qlogei`
+- Seeds: `0, 1, 2, 3, 4`
+- Inclusion gate: `status == completed` and `num_trials >= 80` for every method
+- Primary signals: final `best_objective`, per-seed winner, and best-so-far curves
+
+### Current Reportable Result
+
+From `bo_lhs_turbo_final_summary.csv`, LHS has the best median final objective
+and wins 3 of 5 seeds. BO wins seed `1`; BO and Turbo tie on seed `3`.
+
+| Method | Seeds | Median final best | Mean final best | Best seed result | Worst seed result |
+|---|---:|---:|---:|---:|---:|
+| BO | 5 | -14.657 | -15.649 | -23.814 | -8.052 |
+| LHS | 5 | -19.162 | -18.815 | -25.141 | -9.847 |
+| Turbo | 5 | -19.161 | -17.524 | -22.517 | -9.206 |
+
+This result does not support a claim that the current BO or Turbo setup
+outperforms LHS. It should be reported as a limitation of the current optimizer
+configuration and a motivation for controlled replay or broader-seed follow-up,
+not as evidence that optimization is generally ineffective.
+
+### Evidence Artifacts
+
+- `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_summary.csv`
+- `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_per_seed_final.csv`
+- `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_by_iteration.csv`
+- `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_median.png`
+- `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_best_by_seed.png`
 
 ## Experiment Card: BNN Offline Response-Surrogate Feasibility
 
@@ -219,11 +299,11 @@ metric predictor in MAE and has stronger mean Spearman correlation at train size
 ### Research Question
 
 Can the BNN response-surrogate acquisition backend run inside the same optimizer
-loop as GP qLogEI, and how does it compare in replay?
+loop as GP logEI, and how does it compare in replay?
 
 ### Setup
 
-- Methods: GP qLogEI and BNN EI
+- Methods: GP logEI and BNN EI
 - Seeds: `0, 1, 2, 3, 4`
 - Target trials: `48` per method/seed
 - Completion gate: `status == completed` and `num_trials == target_trials`
@@ -235,7 +315,7 @@ some seeds, but GP has stronger median and mean final best objective.
 
 | Method | Seeds | Median final best | Mean final best | Best | Worst |
 |---|---:|---:|---:|---:|---:|
-| GP qLogEI | 5 | -22.77 | -21.80 | -23.85 | -16.43 |
+| GP logEI | 5 | -22.77 | -21.80 | -23.85 | -16.43 |
 | BNN EI | 5 | -22.08 | -19.55 | -22.77 | -8.07 |
 
 ### Evidence Artifacts
@@ -261,20 +341,20 @@ method selects lower-objective candidates more often?
 ### Setup
 
 - Snapshot count: `200`
-- Reported qLogEI comparison: `gp_qlogei` vs `bnn_qlogei`
+- Reported logEI comparison: `gp_qlogei` vs `bnn_qlogei`
 - Primary signals: selected objective, rank percentile, improvement rate, regret
 
 ### Current Reportable Result
 
 From `acquisition_quality_gp_qlogei_vs_bnn_qlogei/acquisition_quality_summary.csv`,
-BNN qLogEI has weaker selection quality than GP qLogEI in the current snapshot
+BNN logEI has weaker selection quality than GP logEI in the current snapshot
 study. This helps explain why BNN replay optimization has not consistently
 beaten GP.
 
 | Method | Snapshots | Median selected objective | Median rank percentile | Improvement rate | Median regret |
 |---|---:|---:|---:|---:|---:|
-| GP qLogEI | 200 | 9.60 | 0.22 | 0.055 | 33.45 |
-| BNN qLogEI | 200 | 27.39 | 0.46 | 0.045 | 51.24 |
+| GP logEI | 200 | 9.60 | 0.22 | 0.055 | 33.45 |
+| BNN logEI | 200 | 27.39 | 0.46 | 0.045 | 51.24 |
 
 ### Evidence Artifacts
 
@@ -293,7 +373,7 @@ beaten GP.
 ### Research Question
 
 Can the response-surrogate BNN acquisition improve online BCLF optimization
-relative to BO and LHS under the same queue-backed protocol?
+relative to BO, LHS, and Turbo under the same queue-backed protocol?
 
 ### Planned Setup
 

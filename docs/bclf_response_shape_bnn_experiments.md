@@ -171,10 +171,10 @@ Plots:
 - `fewshot_test_response_initial_by_variant.png`
 - `fewshot_test_response_final_by_variant.png`
 
-## Optimizer BNN qLogEI Contract
+## Optimizer BNN logEI Contract
 
 `BNNExpectedImprovementBackend` now uses a response surrogate, not a scalar
-objective BNN, for optimizer-side BNN qLogEI.
+objective BNN, for optimizer-side BNN logEI.
 
 Strict path:
 
@@ -184,11 +184,11 @@ Strict path:
 4. For each remaining candidate, the BNN predicts response samples.
 5. Each response sample is scored by the same `optimization_spec.evaluate(...)`
    used for real simulations.
-6. qLogEI is estimated from sampled metrics:
+6. logEI is estimated from sampled metrics:
 
 ```text
 improvement = max(best_objective - sampled_metric, 0)
-qLogEI = log(mean(improvement))
+logEI = log(mean(improvement))
 ```
 
 Selection debug includes:

@@ -216,9 +216,10 @@ class ScalarBNNRegressor:
 class BNNExpectedImprovementAcquisition:
     """Discrete-candidate acquisition from BNN posterior samples.
 
-    BoTorch maximizes acquisition values. For this minimization problem, qEI
-    with q=1 is `E[max(best_objective - Y, 0)]`. qLogEI is the log of that
-    Monte Carlo estimate; LCB is represented as `-(mean - beta*std)`.
+    BoTorch maximizes acquisition values. For this minimization problem, EI
+    is `E[max(best_objective - Y, 0)]`. The historical `qlogei` mode computes
+    logEI from that Monte Carlo estimate; LCB is represented as
+    `-(mean - beta*std)`.
     """
 
     def __init__(

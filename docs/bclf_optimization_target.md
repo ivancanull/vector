@@ -1,9 +1,9 @@
 # BCLF Optimization Target And Online Settings
 
 This page documents the current BCLF optimization target, parameter constraints,
-and online campaign settings used by the BO and LHS notebooks.
+and online campaign settings used by the BO, LHS, and Turbo notebooks.
 
-The BO/LHS comparison intentionally keeps the BCLF target and evaluation
+The BO/LHS/Turbo comparison intentionally keeps the BCLF target and evaluation
 contract fixed; the method-specific differences are documented below so runs do
 not silently mix bands, thresholds, budgets, or artifact locations.
 
@@ -96,14 +96,16 @@ are violated.
 - Convergence metric: use `best_so_far` over iteration, not raw per-iteration
   objective alone.
 
-## Current BO/LHS Online Comparison
+## Current BO/LHS/Turbo Online Comparison
 
 Source notebooks:
 
 - BO: `notebooks/bo_online_experiment.ipynb`
 - LHS: `notebooks/lhs_online_experiment.ipynb`
+- Turbo: `notebooks/turbo_online_experiment.ipynb`
+- comparison notebook: `notebooks/bo_lhs_online_comparison.ipynb`
 
-### Held Fixed Between BO And LHS
+### Held Fixed Between BO, LHS, And Turbo
 
 | Setting | Current value |
 |---|---|
@@ -126,27 +128,45 @@ Source notebooks:
 | Completion gate | history length must reach the target trial count |
 | Main comparison signal | `best_so_far` over iteration |
 
-The two methods therefore differ only in candidate-selection policy and
+The methods therefore differ only in candidate-selection policy and
 method-specific run bookkeeping. They use the same objective, finite sampled
 candidate-pool construction, simulator adapter, seed list, response channels,
 and per-seed artifact contract.
 
 ### Method-Specific Settings
 
-| Setting | BO online | LHS online |
-|---|---|---|
-| Method label | `global_gp_qlogei` | `lhs_random` |
-| Optimizer class | `OptimizerBoTorch` | `OptimizerLHSRandom` |
-| Selection policy | global GP qLogEI over remaining candidates | deterministic Latin-hypercube sequence in normalized space, selecting the nearest remaining candidate |
-| Initial/model split | `N_INIT=30`, then `BUDGET=50` BO trials | no model-initialization phase; `TOTAL_BUDGET=80` LHS trials |
-| Total trials | `N_INIT + BUDGET = 80` | `TOTAL_BUDGET = 80` |
-| Model fitting | GP surrogate refit every step with `RETRAIN_EVERY=1` | no surrogate model or acquisition fit |
-| Optimizer seed | campaign seed | checkpoint seed on resume, otherwise campaign seed |
-| Reset flag | `RESET_CHECKPOINT=True` in the current BO notebook | `RESET_CHECKPOINT=False` in the current LHS notebook |
-| Output root | `experiments/bo_online_general/` | `experiments/lhs_online_general/` |
-| Run ID pattern | `bo_online_general_seed{seed}` | `lhs_online_general_seed{seed}` |
-| Campaign summary | `experiments/bo_online_general/campaign_summary.csv` | `experiments/lhs_online_general/campaign_summary.csv` |
-| Selection diagnostics | model/acquisition fields when available plus BoTorch debug state | `lhs_index`, candidate-pool size, nearest normalized distance, selected position |
+| Setting | BO online | LHS online | Turbo online |
+|---|---|---|---|
+| Method label | `global_gp_qlogei` | `lhs_random` | `trust_region_gp_qlogei` |
+| Optimizer class | `OptimizerBoTorch` | `OptimizerLHSRandom` | `OptimizerBoTorch` with trust-region selection |
+| Selection policy | global GP logEI over remaining candidates | deterministic Latin-hypercube sequence in normalized space, selecting the nearest remaining candidate | trust-region GP logEI over remaining candidates |
+| Initial/model split | `N_INIT=30`, then `BUDGET=50` BO trials | no model-initialization phase; `TOTAL_BUDGET=80` LHS trials | `N_INIT=30`, then `BUDGET=50` Turbo trials |
+| Total trials | `N_INIT + BUDGET = 80` | `TOTAL_BUDGET = 80` | `N_INIT + BUDGET = 80` |
+| Model fitting | GP surrogate refit every step with `RETRAIN_EVERY=1` | no surrogate model or acquisition fit | GP surrogate refit every step with trust-region state |
+| Optimizer seed | campaign seed | checkpoint seed on resume, otherwise campaign seed | campaign seed |
+| Output root | `experiments/bo_online_general/` | `experiments/lhs_online_general/` | `experiments/turbo_online_general/` |
+| Run ID pattern | `bo_online_general_seed{seed}` | `lhs_online_general_seed{seed}` | `turbo_online_general_seed{seed}` |
+| Campaign summary | `experiments/bo_online_general/campaign_summary.csv` | `experiments/lhs_online_general/campaign_summary.csv` | `experiments/turbo_online_general/campaign_summary.csv` |
+| Selection diagnostics | model/acquisition fields when available plus BoTorch debug state | `lhs_index`, candidate-pool size, nearest normalized distance, selected position | trust-region state plus model/acquisition fields when available |
+
+### Current Five-Seed Comparison Result
+
+The completed 80-trial comparison over seeds `[0, 1, 2, 3, 4]` is summarized by
+`experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_summary.csv` and
+`experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_per_seed_final.csv`.
+Lower objective is better.
+
+| Method | Completed seeds | Median final best | Mean final best | Best seed result | Worst seed result |
+|---|---:|---:|---:|---:|---:|
+| BO | 5 | -14.657 | -15.649 | -23.814 | -8.052 |
+| LHS | 5 | -19.162 | -18.815 | -25.141 | -9.847 |
+| Turbo | 5 | -19.161 | -17.524 | -22.517 | -9.206 |
+
+Per-seed winners are LHS on seeds `0`, `2`, and `4`; BO on seed `1`; and a
+BO/Turbo tie on seed `3`. Under this current protocol, the evidence does not
+support claiming that BO or Turbo outperforms the LHS baseline. This should be
+treated as a limitation of the current optimizer setup, not as proof that
+surrogate-assisted optimization is generally useless for BCLF design.
 
 ## Artifact Roots
 
@@ -157,3 +177,4 @@ own output root:
 |---|---|---|---|
 | BO | `experiments/bo_online_general/` | `bo_online_general_seed{seed}` | `experiments/bo_online_general/campaign_summary.csv` |
 | LHS | `experiments/lhs_online_general/` | `lhs_online_general_seed{seed}` | `experiments/lhs_online_general/campaign_summary.csv` |
+| Turbo | `experiments/turbo_online_general/` | `turbo_online_general_seed{seed}` | `experiments/turbo_online_general/campaign_summary.csv` |

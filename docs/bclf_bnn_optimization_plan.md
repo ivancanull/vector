@@ -29,7 +29,7 @@ BNN results should be compared against:
 
 | Method | Current artifact root | Primary signal |
 |---|---|---|
-| BO | `experiments/bo_online_general/` | global GP qLogEI `best_so_far` |
+| BO | `experiments/bo_online_general/` | global GP logEI `best_so_far` |
 | LHS | `experiments/lhs_online_general/` | Latin-hypercube random `best_so_far` |
 | BNN | `experiments/bnn_online_general/` | BNN acquisition `best_so_far` |
 
@@ -185,7 +185,7 @@ Current replay result:
 
 | Method | Seeds | Median best | Mean best | Best | Worst | Median runtime |
 |---|---:|---:|---:|---:|---:|---:|
-| GP qLogEI | 5 | -22.77 | -21.80 | -23.85 | -16.43 | 29.41 s |
+| GP logEI | 5 | -22.77 | -21.80 | -23.85 | -16.43 | 29.41 s |
 | BNN EI | 5 | -22.08 | -19.55 | -22.77 | -8.07 | 45.01 s |
 
 Seed-level outcome:
@@ -198,7 +198,7 @@ Seed-level outcome:
 Interpretation:
 
 - The optimizer path exists and can be reused for online work.
-- Current BNN EI does not yet beat GP qLogEI in replay.
+- Current BNN EI does not yet beat GP logEI in replay.
 - Runtime is higher for BNN because repeated response-surrogate training and
   sampling are expensive.
 
@@ -215,10 +215,10 @@ Current result:
 
 | Comparison | Method | Median selected objective | Median rank percentile | Improvement rate | Median regret |
 |---|---|---:|---:|---:|---:|
-| EI-style | GP qLogEI | 13.37 | 0.34 | 0.060 | 37.22 |
+| EI-style | GP logEI | 13.37 | 0.34 | 0.060 | 37.22 |
 | EI-style | BNN EI | 23.75 | 0.53 | 0.035 | 46.52 |
-| qLogEI-style | GP qLogEI | 9.60 | 0.22 | 0.055 | 33.45 |
-| qLogEI-style | BNN qLogEI | 27.39 | 0.46 | 0.045 | 51.24 |
+| logEI-style | GP logEI | 9.60 | 0.22 | 0.055 | 33.45 |
+| logEI-style | BNN logEI | 27.39 | 0.46 | 0.045 | 51.24 |
 
 Interpretation:
 
@@ -238,7 +238,7 @@ Interpretation:
 - response-shape metric evaluation;
 - BNN acquisition backend integrated into `OptimizerBoTorch`;
 - full online BNN notebook scaffold with the fixed baseline training schedule;
-- replay optimizer comparison against GP qLogEI;
+- replay optimizer comparison against GP logEI;
 - acquisition-quality diagnostics.
 
 Concrete code/notebook pieces already present:
@@ -285,7 +285,7 @@ checks pass.
 ### Not Yet Proven
 
 - BNN beats BO under the current BO/LHS online protocol;
-- BNN acquisition chooses better candidates than GP qLogEI in offline snapshots;
+- BNN acquisition chooses better candidates than GP logEI in offline snapshots;
 - Fourier response features are wired into online BNN acquisition;
 - completed BNN online campaign artifacts exist under
   `experiments/bnn_online_general/`.

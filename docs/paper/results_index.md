@@ -20,6 +20,7 @@ Rules:
   - `src/optimization/optimization_spec.py`
   - `notebooks/bo_online_experiment.ipynb`
   - `notebooks/lhs_online_experiment.ipynb`
+  - `notebooks/turbo_online_experiment.ipynb`
   - `notebooks/bnn_online_experiment.ipynb`
 - inclusion rule:
   - use the frequency bands and limits documented in `docs/bclf_optimization_target.md`.
@@ -42,7 +43,7 @@ Rules:
   - 5 completed seeds; median final best `-14.657`, mean final best `-15.649`.
 - status: `paper-candidate`
 
-### C003: LHS online currently provides a partial baseline
+### C003: LHS online has a completed five-seed baseline under the current protocol
 
 - experiment card:
   - [experiments.md#experiment-card-lhs-online-baseline](experiments.md#experiment-card-lhs-online-baseline)
@@ -51,11 +52,13 @@ Rules:
   - `experiments/lhs_online_general/lhs_online_general_seed0.json`
   - `experiments/lhs_online_general/lhs_online_general_seed1.json`
   - `experiments/lhs_online_general/lhs_online_general_seed2.json`
+  - `experiments/lhs_online_general/lhs_online_general_seed3.json`
+  - `experiments/lhs_online_general/lhs_online_general_seed4.json`
 - inclusion rule:
-  - include rows with `status == completed` and `num_trials >= 80`; label as partial while fewer than 5 seeds satisfy the gate.
+  - include rows with `status == completed` and `num_trials >= 80`.
 - current numeric summary:
-  - 3 completed seeds; median final best `-19.162`, mean final best `-20.206`.
-- status: `draft`
+  - 5 completed seeds; median final best `-19.162`, mean final best `-18.815`.
+- status: `paper-candidate`
 
 ### C004: The BNN response surrogate is feasible but held-out ranking remains imperfect
 
@@ -110,10 +113,10 @@ Rules:
 - inclusion rule:
   - include rows with `status == completed` and `num_trials == target_trials`.
 - current numeric summary:
-  - GP qLogEI median final best `-22.77`; BNN EI median final best `-22.08`.
+  - GP logEI median final best `-22.77`; BNN EI median final best `-22.08`.
 - status: `paper-candidate`
 
-### C008: Current BNN qLogEI selection quality is weaker than GP qLogEI in offline snapshots
+### C008: Current BNN logEI selection quality is weaker than GP logEI in offline snapshots
 
 - experiment card:
   - [experiments.md#experiment-card-acquisition-quality-snapshot](experiments.md#experiment-card-acquisition-quality-snapshot)
@@ -125,7 +128,7 @@ Rules:
 - inclusion rule:
   - compare `gp_qlogei` and `bnn_qlogei` rows over the same 200 snapshots.
 - current numeric summary:
-  - BNN qLogEI median selected objective `27.39` vs GP qLogEI `9.60`; BNN qLogEI median regret `51.24` vs GP qLogEI `33.45`.
+  - BNN logEI median selected objective `27.39` vs GP logEI `9.60`; BNN logEI median regret `51.24` vs GP logEI `33.45`.
 - status: `paper-candidate`
 
 ### C009: BNN online is implemented as a protocol, not yet as a performance result
@@ -139,6 +142,22 @@ Rules:
 - inclusion rule:
   - do not report BNN online performance until `experiments/bnn_online_general/campaign_summary.csv` exists with completed 80-trial rows for the intended seed set.
 - status: `draft`
+
+### C010: Current BO/Turbo online settings do not outperform LHS in the five-seed comparison
+
+- experiment card:
+  - [experiments.md#experiment-card-bolhsturbo-online-comparison](experiments.md#experiment-card-bolhsturbo-online-comparison)
+- evidence artifacts:
+  - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_summary.csv`
+  - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_per_seed_final.csv`
+  - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_by_iteration.csv`
+  - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_median.png`
+  - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_best_by_seed.png`
+- inclusion rule:
+  - include only methods/seeds whose campaign summaries have `status == completed` and `num_trials >= 80` for seeds `0..4`.
+- current numeric summary:
+  - median final best: BO `-14.657`, LHS `-19.162`, Turbo `-19.161`; LHS wins 3 of 5 seeds.
+- status: `paper-candidate`
 
 ## Promotion Checklist
 

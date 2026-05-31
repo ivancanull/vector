@@ -45,7 +45,7 @@ class BoTorchAcquisitionBackend(Protocol):
 
 
 class GPqLogEIAcquisitionBackend:
-    """Default GP + qLogEI backend used by OptimizerBoTorch."""
+    """Default GP + logEI backend used by OptimizerBoTorch."""
 
     name = "gp_qlogei"
 

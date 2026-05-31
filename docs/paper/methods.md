@@ -49,10 +49,10 @@ history length reaching the target trial count, not by status labels alone.
 
 ## Baseline Methods
 
-### BO: GP qLogEI
+### BO: GP logEI
 
 The BO baseline uses `OptimizerBoTorch` with a Gaussian-process surrogate and
-global qLogEI selection over the remaining candidate pool.
+global logEI selection over the remaining candidate pool.
 
 | Setting | Value |
 |---|---|
@@ -79,6 +79,23 @@ artifact contract as BO. It has no surrogate or acquisition model.
 | Total trials per seed | `80` |
 | Seeds | `[0, 1, 2, 3, 4]` |
 | Output root | `experiments/lhs_online_general/` |
+
+### Turbo: Trust-Region GP logEI
+
+The Turbo baseline uses the same GP logEI backbone as BO, but constrains
+candidate selection with trust-region state. It shares the same target,
+candidate pool, simulator, seed convention, and artifact contract.
+
+| Setting | Value |
+|---|---|
+| Notebook | `notebooks/turbo_online_experiment.ipynb` |
+| Optimizer | `OptimizerBoTorch` with trust-region selection |
+| Method label | `trust_region_gp_qlogei` |
+| Initial trials | `N_INIT = 30` |
+| Turbo trials | `BUDGET = 50` |
+| Total trials per seed | `80` |
+| Seeds | `[0, 1, 2, 3, 4]` |
+| Output root | `experiments/turbo_online_general/` |
 
 ## BNN Response Modeling
 
@@ -124,11 +141,14 @@ should not make a final online ranking claim.
 ## Paper Claim Boundaries
 
 - Supported now: method descriptions, objective protocol, BO online baseline,
-  partial LHS online status, offline BNN feasibility, few-shot BNN updating,
-  response-shape replay studies, BNN EI replay, and acquisition-quality
-  diagnostics.
-- Not supported yet: BNN online performance superiority, final BO-vs-LHS-vs-BNN
-  online ranking, or any conclusion based on incomplete BNN queue-backed runs.
+  completed LHS and Turbo online baselines, BO/LHS/Turbo comparison, offline
+  BNN feasibility, few-shot BNN updating, response-shape replay studies, BNN EI
+  replay, and acquisition-quality diagnostics.
+- Supported limitation: under the current completed five-seed comparison, BO
+  and Turbo do not outperform LHS.
+- Not supported yet: BNN online performance superiority, final
+  BO-vs-LHS-vs-Turbo-vs-BNN online ranking, or any conclusion based on
+  incomplete BNN queue-backed runs.
 
 Operational implementation guidance is maintained in
 [Optimization Experiment Backbone](../optimization_experiment_backbone.md).

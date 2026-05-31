@@ -42,7 +42,7 @@ Use these classes as the stable boundaries when adding another algorithm:
 
 ## Current Algorithm Families
 
-- `OptimizerBoTorch`: GP/BoTorch optimizer with qLogEI-style discrete acquisition.
+- `OptimizerBoTorch`: GP/BoTorch optimizer with logEI-style discrete acquisition.
 - `OptimizerANN`: response-surrogate optimizer using an ANN/TCN model and the same base loop. It stores ANN training sidecar data next to the checkpoint.
 - `OptimizerRandom`: random baseline over the same candidate-space/simulator/spec contract.
 

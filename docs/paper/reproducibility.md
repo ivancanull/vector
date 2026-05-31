@@ -22,6 +22,8 @@ Each paper-facing card in [experiments.md](experiments.md) must include:
 |---|---|
 | BO online | `experiments/bo_online_general/campaign_summary.csv`, per-seed `.json`, `.csv`, `.checkpoint.json` |
 | LHS online | `experiments/lhs_online_general/campaign_summary.csv`, per-seed `.json`, `.csv`, `.checkpoint.json` |
+| Turbo online | `experiments/turbo_online_general/campaign_summary.csv`, per-seed `.json`, `.csv`, `.checkpoint.json` |
+| BO/LHS/Turbo comparison | summary CSVs and plots under `experiments/bo_lhs_turbo_online_comparison/` |
 | BNN online | `experiments/bnn_online_general/campaign_summary.csv`, per-seed `.json`, `.csv`, `.checkpoint.json` once the full campaign is run |
 | BNN offline feasibility | summary CSVs and plots under `experiments/bnn_bclf_offline_feasibility/` |
 | Few-shot BNN replay | `fewshot_metrics_by_variant.csv` plus learning/scatter plots |
@@ -32,7 +34,9 @@ Each paper-facing card in [experiments.md](experiments.md) must include:
 ## Inclusion Gates
 
 - BO online: include seeds with `status == completed` and `num_trials >= 80`.
-- LHS online: include seeds with `status == completed` and `num_trials >= 80`; label as partial while fewer than 5 seeds satisfy this gate.
+- LHS online: include seeds with `status == completed` and `num_trials >= 80`.
+- Turbo online: include seeds with `status == completed` and `num_trials >= 80`.
+- BO/LHS/Turbo comparison: include only seed/method pairs that pass the online gate for the full configured seed set.
 - BNN online: do not include performance claims until the full queue-backed campaign has completed rows under `experiments/bnn_online_general/`.
 - Replay comparisons: include only rows whose `status == completed` and whose `num_trials` equals the configured `target_trials` when that field exists.
 - Offline surrogate studies: use the exact split/method rows named in each experiment card.

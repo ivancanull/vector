@@ -1,6 +1,6 @@
 [submodule "skills/hfss-rf-skill"]
 	path = skills/hfss-rf-skill
-	url = https://github.com/ivancanull/hfss-rf-skill.git
+	url = git@github.com:ivancanull/hfss-rf-skill.git
 [submodule "skills/skill-builder"]
 	path = skills/skill-builder
-	url = https://github.com/ivancanull/skill-builder.git
+	url = git@github.com:ivancanull/skill-builder.git
