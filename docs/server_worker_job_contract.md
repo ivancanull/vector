@@ -20,6 +20,10 @@ Optional compatibility fields:
 - `design_name`
 - `setup_name`
 - `sweep_name`
+- `frequency_points_ghz`: optional explicit GHz points for this job. When
+  provided, the worker sorts and deduplicates the list, rejects empty,
+  non-finite, or non-positive values, and replaces the template sweep with a
+  PyAEDT single-point sweep over exactly those points.
 - `artifact_options`
 - `retry_count`
 
@@ -41,6 +45,7 @@ Example:
   "design_name": "HFSSDesign1",
   "setup_name": "SI",
   "sweep_name": "Sweep1",
+  "frequency_points_ghz": [3.5, 4.2, 5.0],
   "artifact_options": {"export_touchstone": true, "export_csv": true},
   "retry_count": 0
 }
@@ -97,3 +102,18 @@ Usage notes:
 - `variables` values must include explicit units (`55um`, `1.0mm`, `2.4GHz`).
 - `output_filename` must be a Touchstone filename (`.sNp` style; `.s2p` recommended).
 - Worker uses `output_filename` as the primary touchstone artifact name.
+- If `frequency_points_ghz` is omitted, the template's configured HFSS sweep
+  remains the source of truth.
+
+## Frequency Points Contract Check
+
+Run the local non-live contract check from the repo root:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\worker\check_frequency_points_contract.py
+```
+
+This check imports the installed AEDT Python package, verifies the PyAEDT API
+signatures used by the worker, validates job normalization, verifies queue JSON
+emission, and checks the worker setup-designer call shape. It does not open AEDT
+or mutate `.aedt` projects.
