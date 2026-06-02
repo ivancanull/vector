@@ -271,6 +271,7 @@ class HfssJobExecutor:
                 setup_name=template_cfg.setup_name,
                 sweep_name=template_cfg.sweep_name,
                 sweep_config=template_cfg.hfss_sweep,
+                frequency_points_ghz=job.frequency_points_ghz,
             )
             session.analyze(resolved_setup.setup_name)
             exported_touchstone = session.export_touchstone(

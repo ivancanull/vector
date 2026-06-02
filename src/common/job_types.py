@@ -23,6 +23,7 @@ class SimulationJob:
     design_name: str | None = None
     setup_name: str | None = None
     sweep_name: str | None = None
+    frequency_points_ghz: list[float] | None = None
     artifact_options: dict[str, bool | None] = field(default_factory=dict)
     retry_count: int = 0
     status: JobStatus = JobStatus.PENDING
@@ -44,5 +45,6 @@ class BatchSimulationJob:
     design_name: str | None = None
     setup_name: str | None = None
     sweep_name: str | None = None
+    frequency_points_ghz: list[float] | None = None
     artifact_options: dict[str, bool | None] = field(default_factory=dict)
     retry_count: int = 0

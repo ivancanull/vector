@@ -1,5 +1,8 @@
 # Scripts
 
+Notebook-specific runners live in `notebooks/scripts/`; see
+`notebooks/scripts/README.md`.
+
 ## Server: Submit Spiral Batch
 
 Submit one batch file and emit one per-case job JSON into `queue/pending`.

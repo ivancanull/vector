@@ -224,3 +224,10 @@ AGENTS.md
 
 # local run notes
 TMUX_JUPYTER_CHEATSHEET.md
+
+# local notebook background runs
+/logs/*
+!/logs/.gitkeep
+!/logs/hfss_runs/
+!/logs/hfss_runs/.gitkeep
+/executed_notebooks/

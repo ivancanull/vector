@@ -1,0 +1,8 @@
+target_repo: hfss-rf-skill
+target_skill_repo: ../skills/hfss-rf-skill
+playground_repo: ../skills/hfss-rf-skill-playground
+experiment_variants:
+  - baseline
+  - current_skill
+  - ablated_skill
+  - improved_skill

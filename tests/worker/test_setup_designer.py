@@ -78,6 +78,22 @@ class FakeSetup:
         sweep.props["RangeStep"] = step_size
         return sweep
 
+    def create_single_point_sweep(
+        self,
+        name: str | None = None,
+        unit: str = "GHz",
+        freq=None,
+        save_single_field: bool = False,
+        save_fields: bool = False,
+    ) -> FakeSweep:
+        sweep = self.add_sweep(name or "Sweep", "SinglePoint")
+        sweep.props["RangeType"] = "SinglePoints"
+        sweep.props["Unit"] = unit
+        sweep.props["Frequencies"] = list(freq or [])
+        sweep.props["SaveSingleField"] = save_single_field
+        sweep.props["SaveFields"] = save_fields
+        return sweep
+
     def get_sweep(self, name: str | None = None):
         if name is None:
             return self.sweeps[0] if self.sweeps else False
@@ -183,6 +199,32 @@ def test_hfss_sweep_config_rejects_mixed_definition() -> None:
         )
 
 
+def test_job_request_normalizes_frequency_points() -> None:
+    job = JobRequest(
+        job_id="job-001",
+        template_name="si_template_v1",
+        variables={"Din": "55um"},
+        output_filename="job-001.s2p",
+        metrics_to_extract=["max_s11_db"],
+        submit_time="2026-04-24T08:00:00Z",
+        frequency_points_ghz=[5.0, 3.5, 5.0, 4.2],
+    )
+    assert job.frequency_points_ghz == [3.5, 4.2, 5.0]
+
+
+def test_job_request_rejects_invalid_frequency_points() -> None:
+    with pytest.raises(ValueError):
+        JobRequest(
+            job_id="job-001",
+            template_name="si_template_v1",
+            variables={"Din": "55um"},
+            output_filename="job-001.s2p",
+            metrics_to_extract=["max_s11_db"],
+            submit_time="2026-04-24T08:00:00Z",
+            frequency_points_ghz=[3.5, 0.0],
+        )
+
+
 def test_template_registry_carries_hfss_sweep_config(tmp_path: Path) -> None:
     project_file = tmp_path / "template.aedt"
     project_file.write_text("placeholder", encoding="utf-8")
@@ -247,6 +289,27 @@ def test_setup_designer_modifies_existing_setup_in_place() -> None:
     assert recreated.props["RangeCount"] == 201
 
 
+def test_setup_designer_uses_single_point_sweep_for_job_frequency_points() -> None:
+    from worker.setup_designer import HfssSetupDesigner
+
+    hfss = FakeHfss()
+    designer = HfssSetupDesigner()
+    designer.ensure_setup(
+        hfss,
+        setup_name="Setup1",
+        sweep_name="Sweep1",
+        sweep_config=_hfss_sweep_config(),
+        frequency_points_ghz=[5.0, 3.5, 4.2],
+    )
+
+    sweep = hfss.setups[0].sweeps[0]
+    assert sweep.props["RangeType"] == "SinglePoints"
+    assert sweep.props["Unit"] == "GHz"
+    assert sweep.props["Frequencies"] == [3.5, 4.2, 5.0]
+    assert sweep.props["SaveSingleField"] is False
+    assert sweep.props["SaveFields"] is False
+
+
 def test_setup_designer_raises_when_setup_cannot_create_sweep() -> None:
     from worker.setup_designer import HfssSetupDesigner
 
@@ -299,6 +362,7 @@ def test_execute_job_calls_setup_designer_before_analysis_and_export(
     class FakeDesigner:
         def ensure_setup(self, hfss, **kwargs):
             events.append(f"ensure:{kwargs['setup_name']}:{kwargs['sweep_name']}")
+            assert kwargs["frequency_points_ghz"] is None
             return type("Resolved", (), {"setup_name": kwargs["setup_name"], "sweep_name": kwargs["sweep_name"]})()
 
     class FakeSession:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Sequence
 
 from worker.schemas import HfssSweepConfig
 from worker.utils import WorkerError
@@ -20,12 +21,18 @@ class HfssSetupDesigner:
         setup_name: str,
         sweep_name: str,
         sweep_config: HfssSweepConfig,
+        frequency_points_ghz: Sequence[float] | None = None,
     ) -> ResolvedHfssSetup:
         try:
             setup = self._get_setup(hfss, setup_name)
             if setup is None:
                 setup = hfss.create_setup(setup_name)
-            self._ensure_sweep(setup, sweep_name, sweep_config)
+            self._ensure_sweep(
+                setup,
+                sweep_name,
+                sweep_config,
+                frequency_points_ghz=frequency_points_ghz,
+            )
             return ResolvedHfssSetup(setup_name=setup_name, sweep_name=sweep_name)
         except WorkerError:
             raise
@@ -46,7 +53,14 @@ class HfssSetupDesigner:
                     return setup
         return None
 
-    def _ensure_sweep(self, setup, sweep_name: str, config: HfssSweepConfig):
+    def _ensure_sweep(
+        self,
+        setup,
+        sweep_name: str,
+        config: HfssSweepConfig,
+        *,
+        frequency_points_ghz: Sequence[float] | None = None,
+    ):
         existing = setup.get_sweep(sweep_name)
         if existing:
             deleted = setup.delete_sweep(sweep_name)
@@ -56,38 +70,41 @@ class HfssSetupDesigner:
                     f"Failed to replace existing sweep {sweep_name} in setup {setup.name}",
                 )
 
-        sweep_type = self._normalize_sweep_type(config.sweep_type)
-        if config.sweep_data is not None:
-            range_type, start, stop, count_or_step = self._parse_sweep_data(config.sweep_data)
-            if range_type == "LINC":
-                sweep = setup.create_frequency_sweep(
-                    start_frequency=start,
-                    stop_frequency=stop,
-                    num_of_freq_points=int(count_or_step),
-                    name=sweep_name,
-                    sweep_type=sweep_type,
-                )
-            elif range_type == "LIN":
-                sweep = setup.create_linear_step_sweep(
-                    start_frequency=start,
-                    stop_frequency=stop,
-                    step_size=count_or_step,
-                    name=sweep_name,
-                    sweep_type=sweep_type,
-                )
-            else:
-                raise WorkerError(
-                    "setup_definition_failure",
-                    f"Unsupported sweep_data format: {config.sweep_data}",
-                )
+        if frequency_points_ghz is not None:
+            sweep = self._create_single_point_sweep(setup, sweep_name, frequency_points_ghz)
         else:
-            sweep = setup.create_frequency_sweep(
-                start_frequency=config.start_freq,
-                stop_frequency=config.stop_freq,
-                num_of_freq_points=config.point_count,
-                name=sweep_name,
-                sweep_type=sweep_type,
-            )
+            sweep_type = self._normalize_sweep_type(config.sweep_type)
+            if config.sweep_data is not None:
+                range_type, start, stop, count_or_step = self._parse_sweep_data(config.sweep_data)
+                if range_type == "LINC":
+                    sweep = setup.create_frequency_sweep(
+                        start_frequency=start,
+                        stop_frequency=stop,
+                        num_of_freq_points=int(count_or_step),
+                        name=sweep_name,
+                        sweep_type=sweep_type,
+                    )
+                elif range_type == "LIN":
+                    sweep = setup.create_linear_step_sweep(
+                        start_frequency=start,
+                        stop_frequency=stop,
+                        step_size=count_or_step,
+                        name=sweep_name,
+                        sweep_type=sweep_type,
+                    )
+                else:
+                    raise WorkerError(
+                        "setup_definition_failure",
+                        f"Unsupported sweep_data format: {config.sweep_data}",
+                    )
+            else:
+                sweep = setup.create_frequency_sweep(
+                    start_frequency=config.start_freq,
+                    stop_frequency=config.stop_freq,
+                    num_of_freq_points=config.point_count,
+                    name=sweep_name,
+                    sweep_type=sweep_type,
+                )
 
         if not sweep:
             raise WorkerError(
@@ -95,6 +112,21 @@ class HfssSetupDesigner:
                 f"Failed to create sweep {sweep_name} in setup {setup.name}",
             )
         return sweep
+
+    def _create_single_point_sweep(self, setup, sweep_name: str, points_ghz: Sequence[float]):
+        points = sorted({float(point) for point in points_ghz})
+        if not hasattr(setup, "create_single_point_sweep"):
+            raise WorkerError(
+                "setup_definition_failure",
+                "HFSS setup does not support create_single_point_sweep",
+            )
+        return setup.create_single_point_sweep(
+            name=sweep_name,
+            unit="GHz",
+            freq=points,
+            save_single_field=False,
+            save_fields=False,
+        )
 
     def _normalize_sweep_type(self, sweep_type: str) -> str:
         mapping = {
@@ -113,4 +145,3 @@ class HfssSetupDesigner:
             )
         range_type, start, stop, count_or_step = parts
         return range_type.upper(), start, stop, count_or_step
-

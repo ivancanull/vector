@@ -26,6 +26,7 @@ class QueueManager:
                 "design_name": job.design_name,
                 "setup_name": job.setup_name,
                 "sweep_name": job.sweep_name,
+                "frequency_points_ghz": job.frequency_points_ghz,
                 "artifact_options": job.artifact_options,
                 "retry_count": job.retry_count,
             },
@@ -72,6 +73,7 @@ class QueueManager:
                 design_name=batch_job.design_name,
                 setup_name=batch_job.setup_name,
                 sweep_name=batch_job.sweep_name,
+                frequency_points_ghz=batch_job.frequency_points_ghz,
                 artifact_options=batch_job.artifact_options,
                 retry_count=batch_job.retry_count,
             )
@@ -98,6 +100,7 @@ class QueueManager:
                 design_name=payload.get("design_name"),
                 setup_name=payload.get("setup_name"),
                 sweep_name=payload.get("sweep_name"),
+                frequency_points_ghz=payload.get("frequency_points_ghz"),
                 artifact_options=payload.get("artifact_options", {}),
                 retry_count=payload.get("retry_count", 0),
                 status=JobStatus(payload.get("status", JobStatus.PENDING.value)),

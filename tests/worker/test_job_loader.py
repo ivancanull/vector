@@ -36,6 +36,7 @@ def _valid_payload() -> dict:
         "template_name": "bclf_template_v1",
         "setup_name": "Setup1",
         "sweep_name": "Sweep1",
+        "frequency_points_ghz": [5.0, 3.5, 5.0],
         "variables": {"L": "7.8mm", "W": "1.0mm"},
         "output_filename": "bclf_000001.s2p",
         "metrics_to_extract": ["max_s11_db", "min_s21_db"],
@@ -51,6 +52,18 @@ def test_valid_job_loads(tmp_path: Path) -> None:
     path.write_text(json.dumps(_valid_payload()), encoding="utf-8")
     job = load_job(path, registry)
     assert job.job_id == "bclf_000001"
+    assert job.frequency_points_ghz == [3.5, 5.0]
+
+
+def test_invalid_frequency_points_fail(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    payload = _valid_payload()
+    payload["frequency_points_ghz"] = [3.5, -1.0]
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(WorkerError) as exc:
+        load_job(path, registry)
+    assert exc.value.failure_class == "invalid_job_json"
 
 
 def test_missing_required_field_fails(tmp_path: Path) -> None:

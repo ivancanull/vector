@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -47,6 +48,7 @@ class JobRequest(BaseModel):
     template_name: str = Field(min_length=1)
     setup_name: str | None = None
     sweep_name: str | None = None
+    frequency_points_ghz: list[float] | None = None
     variables: dict[str, str]
     output_filename: str = Field(min_length=1)
     metrics_to_extract: list[str]
@@ -82,6 +84,19 @@ class JobRequest(BaseModel):
         if not (suffix.startswith(".s") and suffix.endswith("p")):
             raise ValueError("output_filename must be a Touchstone file name like .s2p")
         return value
+
+    @field_validator("frequency_points_ghz")
+    @classmethod
+    def validate_frequency_points(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("frequency_points_ghz must be non-empty when provided")
+        points = sorted({float(item) for item in value})
+        for point in points:
+            if not math.isfinite(point) or point <= 0:
+                raise ValueError("frequency_points_ghz values must be finite and > 0")
+        return points
 
 
 class TemplateConfig(BaseModel):
