@@ -5,7 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
+from common.io_utils import write_json
 from optimization.datasets import PassiveDataset
+import optimization.simulators as simulators_module
 from optimization.simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator
 
 
@@ -208,8 +210,8 @@ def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeyp
     assert out.metadata is not None and out.metadata["cache_hit"] is False
     assert store.lookup_calls == 1
     assert store.save_calls == 1
-    # enqueue happened before done-read
-    assert (queue_root / "pending" / f"{job_id}.json").exists()
+    # Existing done/running state means a resume should not enqueue a duplicate pending job.
+    assert not (queue_root / "pending" / f"{job_id}.json").exists()
     assert not (queue_root / "running" / f"{job_id}.json").exists()
     assert (queue_root / "archive" / "running" / f"{job_id}.json").exists()
 
@@ -259,3 +261,118 @@ def test_server_queue_simulator_failed_and_timeout(tmp_path: Path, monkeypatch) 
     timed = simulator.simulate(np.array([7.7, 0.9]))
     assert timed.status == "failed"
     assert timed.error == "job_timeout"
+
+
+def test_server_queue_simulator_resumes_running_job_without_duplicate_pending(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    queue_root = tmp_path / "queue"
+    for name in ("pending", "running", "done", "failed", "results"):
+        (queue_root / name).mkdir(parents=True, exist_ok=True)
+
+    store = _FakeStore(cached_path=None)
+    simulator = ServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="run_resume",
+        poll_interval_sec=0.01,
+        job_timeout_sec=0.0,
+    )
+    simulator.set_context(run_id="run_resume", iteration=0)
+    job_id = "run_resume_it0000"
+    (queue_root / "running" / f"{job_id}.json").write_text("{}", encoding="utf-8")
+    (queue_root / "pending" / f"{job_id}.json").write_text("{}", encoding="utf-8")
+    touchstone = queue_root / "results" / f"{job_id}.s2p"
+    touchstone.write_text("dummy", encoding="utf-8")
+
+    def _finish_after_first_poll(_seconds: float) -> None:
+        write_json(
+            queue_root / "done" / f"{job_id}.result.json",
+            {
+                "job_id": job_id,
+                "status": "done",
+                "artifacts": {"touchstone": f"results/{job_id}.s2p"},
+            },
+        )
+
+    monkeypatch.setattr(simulators_module.time, "sleep", _finish_after_first_poll)
+    monkeypatch.setattr(
+        simulator,
+        "_load_touchstone",
+        lambda _path: (np.array([1.0]), np.zeros((2, 2, 1), dtype=complex)),
+    )
+
+    out = simulator.simulate(np.array([7.8, 1.0]))
+
+    assert out.status == "done"
+    assert not (queue_root / "pending" / f"{job_id}.json").exists()
+    assert (queue_root / "archive" / "pending_duplicate" / f"{job_id}.json").exists()
+    assert (queue_root / "archive" / "running" / f"{job_id}.json").exists()
+
+
+def test_server_queue_simulator_waits_on_failed_when_configured(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    queue_root = tmp_path / "queue"
+    for name in ("pending", "running", "done", "failed", "results"):
+        (queue_root / name).mkdir(parents=True, exist_ok=True)
+
+    store = _FakeStore(cached_path=None)
+    simulator = ServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="run_wait_failed",
+        poll_interval_sec=0.01,
+        job_timeout_sec=0.0,
+        wait_on_failed=True,
+    )
+    simulator.set_context(run_id="run_wait_failed", iteration=0)
+    job_id = "run_wait_failed_it0000"
+    (queue_root / "failed" / f"{job_id}.result.json").write_text(
+        (
+            '{\n'
+            f'  "job_id": "{job_id}",\n'
+            '  "status": "failed",\n'
+            '  "error_message": "mesh_failure"\n'
+            '}\n'
+        ),
+        encoding="utf-8",
+    )
+    touchstone = queue_root / "results" / f"{job_id}.s2p"
+    touchstone.write_text("dummy", encoding="utf-8")
+    sleep_calls = 0
+
+    def _finish_after_first_poll(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        write_json(
+            queue_root / "done" / f"{job_id}.result.json",
+            {
+                "job_id": job_id,
+                "status": "done",
+                "artifacts": {"touchstone": f"results/{job_id}.s2p"},
+            },
+        )
+
+    monkeypatch.setattr(simulators_module.time, "sleep", _finish_after_first_poll)
+    monkeypatch.setattr(
+        simulator,
+        "_load_touchstone",
+        lambda _path: (np.array([1.0]), np.zeros((2, 2, 1), dtype=complex)),
+    )
+
+    out = simulator.simulate(np.array([7.8, 1.0]))
+
+    assert out.status == "done"
+    assert sleep_calls == 1
+    assert store.save_calls == 1

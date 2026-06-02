@@ -1,7 +1,7 @@
 worker_name: hfss_win01_local
 queue_root: D:/vector/queue
 templates_yaml: D:/vector/configs/templates.spiral_local.yaml
-poll_interval_sec: 2
+poll_interval_sec: 30
 claim_retry_sec: 1
 results_dir: D:/vector/queue/results
 logs_dir: D:/vector/logs

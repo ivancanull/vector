@@ -152,6 +152,8 @@ class ServerQueueSimulator(Simulator):
         job_timeout_sec: float = 7200.0,
         run_id: str = "bo_online",
         mm_resolution: float = 0.01,
+        wait_on_failed: bool = False,
+        wait_status_interval_sec: float = 60.0,
         verbose: bool = False,
     ) -> None:
         super().__init__()
@@ -169,6 +171,8 @@ class ServerQueueSimulator(Simulator):
         self.job_timeout_sec = float(job_timeout_sec)
         self.run_id = run_id
         self.mm_resolution = float(mm_resolution)
+        self.wait_on_failed = bool(wait_on_failed)
+        self.wait_status_interval_sec = float(wait_status_interval_sec)
         self.verbose = bool(verbose)
         if self.mm_resolution <= 0:
             raise ValueError("mm_resolution must be > 0")
@@ -248,11 +252,7 @@ class ServerQueueSimulator(Simulator):
             )
 
         job = self._build_job(case_id, request.variables)
-        self._log(
-            f"enqueue: job_id={job.job_id} template={job.template_name} output={job.output_filename} "
-            f"queue_root={self.queue_root}"
-        )
-        self.queue.enqueue(job)
+        self._enqueue_or_resume(job)
         wait_res = self._wait_job_result(case_id)
         self._log(
             f"wait result: case_id={case_id} status={wait_res.get('status')} "
@@ -391,11 +391,49 @@ class ServerQueueSimulator(Simulator):
             sweep_name=self.sweep_name,
         )
 
+    def _enqueue_or_resume(self, job: SimulationJob) -> None:
+        queue_root = self.queue.root
+        pending_path = queue_root / "pending" / f"{job.job_id}.json"
+        running_path = queue_root / "running" / f"{job.job_id}.json"
+        done_path = queue_root / "done" / f"{job.job_id}.result.json"
+        failed_path = queue_root / "failed" / f"{job.job_id}.result.json"
+
+        existing_states = [
+            state
+            for state, path in (
+                ("done", done_path),
+                ("failed", failed_path),
+                ("running", running_path),
+                ("pending", pending_path),
+            )
+            if path.exists()
+        ]
+        if existing_states:
+            # A pending file alongside running/done is a stale duplicate from a resume.
+            # Keep failed+pending intact because that may be an intentional manual retry.
+            if pending_path.exists() and any(state in existing_states for state in ("running", "done")):
+                archived = self._archive_pending_duplicate(job.job_id, queue_root)
+                self._log(
+                    f"archived duplicate pending: job_id={job.job_id} archived={archived}"
+                )
+            self._log(
+                f"resume existing queue job: job_id={job.job_id} states={existing_states} "
+                f"queue_root={self.queue_root}"
+            )
+            return
+
+        self._log(
+            f"enqueue: job_id={job.job_id} template={job.template_name} output={job.output_filename} "
+            f"queue_root={self.queue_root}"
+        )
+        self.queue.enqueue(job)
+
     def _wait_job_result(self, case_id: str) -> dict[str, Any]:
         queue_root = self.queue.root
         done_path = queue_root / "done" / f"{case_id}.result.json"
         failed_path = queue_root / "failed" / f"{case_id}.result.json"
         start = time.perf_counter()
+        last_status_at = start
         while True:
             if done_path.exists():
                 archived_running = self._archive_running_job(case_id, queue_root)
@@ -407,6 +445,16 @@ class ServerQueueSimulator(Simulator):
                     "archived_running_path": str(archived_running) if archived_running else None,
                 }
             if failed_path.exists():
+                if self.wait_on_failed:
+                    now = time.perf_counter()
+                    if now - last_status_at >= self.wait_status_interval_sec:
+                        self._log(
+                            f"failed result exists; still waiting: case_id={case_id} "
+                            f"failed_result={failed_path}"
+                        )
+                        last_status_at = now
+                    time.sleep(self.poll_interval_sec)
+                    continue
                 payload = read_json(failed_path)
                 archived_running = self._archive_running_job(case_id, queue_root)
                 return {
@@ -417,7 +465,7 @@ class ServerQueueSimulator(Simulator):
                     "error": payload.get("error_message", "simulation_failed"),
                     "archived_running_path": str(archived_running) if archived_running else None,
                 }
-            if (time.perf_counter() - start) >= self.job_timeout_sec:
+            if self.job_timeout_sec > 0 and (time.perf_counter() - start) >= self.job_timeout_sec:
                 return {
                     "status": "failed",
                     "result_json_path": None,
@@ -451,6 +499,20 @@ class ServerQueueSimulator(Simulator):
             ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
             target = archive_dir / f"{running_path.stem}.{ts}{running_path.suffix}"
         running_path.replace(target)
+        return target
+
+    @staticmethod
+    def _archive_pending_duplicate(case_id: str, queue_root: Path) -> Path | None:
+        pending_path = queue_root / "pending" / f"{case_id}.json"
+        if not pending_path.exists():
+            return None
+        archive_dir = queue_root / "archive" / "pending_duplicate"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        target = archive_dir / pending_path.name
+        if target.exists():
+            ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+            target = archive_dir / f"{pending_path.stem}.{ts}{pending_path.suffix}"
+        pending_path.replace(target)
         return target
 
 

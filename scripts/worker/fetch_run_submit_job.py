@@ -75,6 +75,31 @@ def _build_sftp_settings(
     )
 
 
+def _is_retryable_sftp_connect_error(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+
+    try:
+        import paramiko  # type: ignore
+    except ImportError:
+        return False
+
+    ssh_exceptions: tuple[type[BaseException], ...] = (
+        paramiko.SSHException,
+    )
+    return isinstance(exc, ssh_exceptions)
+
+
+def _format_sftp_connect_error(exc: BaseException) -> str:
+    message = str(exc).replace("\n", " ").strip()
+    error_class = exc.__class__.__name__
+    return (
+        f"status=sftp_connect_failed error_class={error_class}"
+        if not message
+        else f"status=sftp_connect_failed error_class={error_class} error={message}"
+    )
+
+
 def run(
     *,
     worker_config: Path,
@@ -113,7 +138,14 @@ def run(
         idle_started_at: float | None = None
         last_idle_status_at: float | None = None
         while True:
-            claim = remote_queue.claim_one()
+            try:
+                claim = remote_queue.claim_one()
+            except Exception as exc:
+                if not _is_retryable_sftp_connect_error(exc):
+                    raise
+                print(f"{_format_sftp_connect_error(exc)} poll_interval_sec={poll_interval}")
+                time.sleep(poll_interval)
+                continue
             if claim is not None:
                 break
             if not wait_when_empty:
