@@ -111,6 +111,32 @@ def test_optimizer_lhs_random_uses_lhs_for_initial_trials(tmp_path: Path) -> Non
     assert [row["selection_debug"]["lhs_index"] for row in init_rows] == [0, 1]
 
 
+def test_optimizer_lhs_random_respects_fixed_initial_geometries(tmp_path: Path) -> None:
+    fixed_initial = np.asarray([[2.5, 1.0], [0.0, 0.0]], dtype=float)
+    optimizer = OptimizerLHSRandom(
+        candidate_space=_candidate_space(),
+        simulator=LookupSimulator(),
+        optimization_spec=EncodedScalarSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_fixed"),
+        budget=1,
+        n_init=2,
+        seed=5,
+        run_id="lhs_fixed_init",
+        checkpoint_path=tmp_path / "lhs_fixed_init.checkpoint.json",
+        initial_geometries=fixed_initial,
+    )
+
+    history = optimizer.run().history
+
+    assert [row["requested_geometry"] for row in history[:2]] == fixed_initial.tolist()
+    assert [row["selection_debug"]["mode"] for row in history[:2]] == [
+        "fixed_initial_geometry",
+        "fixed_initial_geometry",
+    ]
+    assert history[2]["selection_debug"]["mode"] == "lhs_random"
+    assert history[2]["selection_debug"]["lhs_index"] == 2
+
+
 def test_optimizer_lhs_random_does_not_repeat_candidates(tmp_path: Path) -> None:
     history = _run_lhs(tmp_path, seed=19)
 

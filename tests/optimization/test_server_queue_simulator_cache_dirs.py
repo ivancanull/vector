@@ -18,7 +18,12 @@ PARAM_SET = {
 }
 
 
-def _make_simulator(queue_root: Path, cache_root: Path) -> ServerQueueSimulator:
+def _make_simulator(
+    queue_root: Path,
+    cache_root: Path,
+    *,
+    cache_required_iterations: int = 0,
+) -> ServerQueueSimulator:
     store = FilesystemResultStore(
         root_dir=cache_root,
         naming_strategy=BandpassFilterNamingStrategy(),
@@ -32,6 +37,7 @@ def _make_simulator(queue_root: Path, cache_root: Path) -> ServerQueueSimulator:
         port_num=PARAM_SET["port_num"],
         result_store=store,
         run_id="cache_dir_test",
+        cache_required_iterations=cache_required_iterations,
     )
 
 
@@ -70,4 +76,25 @@ def test_server_queue_simulator_reads_existing_snp_from_cache_dirs(
     assert result.status == "done"
     assert result.metadata is not None
     assert result.metadata["cache_hit"] is True
+    assert list((queue_root / "pending").glob("*.json")) == []
+
+
+def test_server_queue_simulator_cache_required_iteration_does_not_enqueue(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+    (queue_root / "pending").mkdir(parents=True, exist_ok=True)
+    cache_dir = tmp_path / "empty_cache"
+
+    simulator = _make_simulator(
+        queue_root=queue_root,
+        cache_root=cache_dir,
+        cache_required_iterations=1,
+    )
+    simulator.set_context(run_id="cache_required", iteration=0)
+
+    result = simulator.simulate(PARAM_SET["geometry"])
+
+    assert result.status == "failed"
+    assert result.metadata is not None
+    assert result.metadata["cache_required"] is True
+    assert result.metadata["cache_hit"] is False
     assert list((queue_root / "pending").glob("*.json")) == []

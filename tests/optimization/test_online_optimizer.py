@@ -218,6 +218,57 @@ def test_online_optimizer_checkpoint_resume(tmp_path: Path) -> None:
     assert [row["geometry"] for row in resumed.history] == [row["geometry"] for row in first.history]
 
 
+def test_online_optimizer_uses_fixed_initial_geometries_and_resume(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "fixed_init.checkpoint.json"
+    initial_geometries = np.asarray([[1.5], [0.0]], dtype=float)
+    metadata = [{"source": "shared_lhs_cache"}, {"source": "shared_lhs_cache"}]
+
+    first = OptimizerBoTorch(
+        candidate_space=DiscreteCandidateSpace(
+            variable_order=["x"],
+            candidate_geometries=np.asarray([[0.0], [0.5], [1.0], [1.5], [2.0]], dtype=float),
+        ),
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0, 2.0, 3.0]), step=0.1),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records"),
+        budget=1,
+        n_init=2,
+        seed=11,
+        run_id="fixed_init",
+        checkpoint_path=checkpoint,
+        initial_geometries=initial_geometries,
+        initial_geometry_metadata=metadata,
+    ).run()
+
+    assert [row["requested_geometry"] for row in first.history[:2]] == [[1.5], [0.0]]
+    assert [row["selection_debug"]["mode"] for row in first.history[:2]] == [
+        "fixed_initial_geometry",
+        "fixed_initial_geometry",
+    ]
+    assert first.history[0]["selection_debug"]["source"] == "shared_lhs_cache"
+
+    resumed = OptimizerBoTorch(
+        candidate_space=DiscreteCandidateSpace(
+            variable_order=["x"],
+            candidate_geometries=np.asarray([[0.0], [0.5], [1.0], [1.5], [2.0]], dtype=float),
+        ),
+        simulator=RoundingFakeSimulator(freqs=np.array([1.0, 2.0, 3.0]), step=0.1),
+        optimization_spec=ScalarEncodedSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_resumed"),
+        budget=1,
+        n_init=2,
+        seed=11,
+        run_id="fixed_init",
+        checkpoint_path=checkpoint,
+        resume=True,
+        initial_geometries=initial_geometries,
+        initial_geometry_metadata=metadata,
+    ).run()
+
+    assert len(resumed.history) == len(first.history)
+    assert [row["requested_geometry"] for row in resumed.history[:2]] == [[1.5], [0.0]]
+
+
 def test_trust_region_filters_candidates_in_deterministic_path(tmp_path: Path) -> None:
     # Ordered points so deterministic fallback picks first candidate in filtered subset.
     pool = np.asarray([[0.0], [0.3], [0.7], [1.0]], dtype=float)

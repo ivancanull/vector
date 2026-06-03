@@ -20,6 +20,8 @@ class OptimizerLHSRandom(OptimizerBase):
         return [self._select_lhs_candidate(iteration)]
 
     def _initial_selections(self) -> list[SelectionResult]:
+        if self.initial_geometries is not None:
+            return super()._initial_selections()
         return [self._select_lhs_candidate(len(self._history))]
 
     def _build_lhs_sequence(self) -> np.ndarray:

@@ -152,6 +152,7 @@ class ServerQueueSimulator(Simulator):
         job_timeout_sec: float = 7200.0,
         run_id: str = "bo_online",
         mm_resolution: float = 0.01,
+        cache_required_iterations: int = 0,
         wait_on_failed: bool = False,
         wait_status_interval_sec: float = 60.0,
         verbose: bool = False,
@@ -171,11 +172,14 @@ class ServerQueueSimulator(Simulator):
         self.job_timeout_sec = float(job_timeout_sec)
         self.run_id = run_id
         self.mm_resolution = float(mm_resolution)
+        self.cache_required_iterations = int(cache_required_iterations)
         self.wait_on_failed = bool(wait_on_failed)
         self.wait_status_interval_sec = float(wait_status_interval_sec)
         self.verbose = bool(verbose)
         if self.mm_resolution <= 0:
             raise ValueError("mm_resolution must be > 0")
+        if self.cache_required_iterations < 0:
+            raise ValueError("cache_required_iterations must be >= 0")
 
         self.queue = QueueManager(self.queue_root)
         self._next_case_id = 0
@@ -188,6 +192,7 @@ class ServerQueueSimulator(Simulator):
     def simulate(self, geometry: np.ndarray) -> SimulationResult:
         self.num_calls += 1
         start = time.perf_counter()
+        context_iteration = self._context_iteration
         values = np.asarray(geometry, dtype=float).reshape(-1)
         self._log(f"simulate call={self.num_calls} run_id={self.run_id} geometry={values.tolist()}")
         if len(values) != len(self.variable_order):
@@ -246,6 +251,30 @@ class ServerQueueSimulator(Simulator):
                     "result_json_path": None,
                     "wait_seconds": 0.0,
                     "touchstone_path": str(cached.touchstone_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        if self._cache_is_required(context_iteration):
+            self.num_failures += 1
+            self._log(f"cache required miss: case_id={case_id}; not enqueueing")
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=(
+                    "Cache miss for a cache-required iteration; "
+                    "shared initial designs must already exist in the result store"
+                ),
+                metadata={
+                    "cache_hit": False,
+                    "cache_required": True,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": None,
+                    "wait_seconds": 0.0,
+                    "touchstone_path": None,
                     "simulator_elapsed_sec": float(time.perf_counter() - start),
                 },
                 actual_geometry=actual_geometry,
@@ -372,6 +401,11 @@ class ServerQueueSimulator(Simulator):
     def _log(self, message: str) -> None:
         if self.verbose:
             print(f"[ServerQueueSimulator] {message}")
+
+    def _cache_is_required(self, iteration: int | None) -> bool:
+        if self.cache_required_iterations <= 0 or iteration is None:
+            return False
+        return int(iteration) < int(self.cache_required_iterations)
 
     def _build_job(self, case_id: str, variables: dict[str, float]) -> SimulationJob:
         formatted: dict[str, str] = {}

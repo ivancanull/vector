@@ -68,6 +68,8 @@ class OptimizerBase(ABC):
         run_id: str = "online_optimizer",
         checkpoint_path: str | Path = "experiments/bo_online/checkpoint.json",
         resume: bool = False,
+        initial_geometries: Sequence[Sequence[float]] | np.ndarray | None = None,
+        initial_geometry_metadata: Sequence[dict[str, Any]] | None = None,
         progress_callback: Callable[[dict[str, Any], list[dict[str, Any]]], None] | None = None,
     ) -> None:
         if budget < 0:
@@ -85,6 +87,8 @@ class OptimizerBase(ABC):
         self.run_id = str(run_id)
         self.checkpoint_path = Path(checkpoint_path)
         self.progress_callback = progress_callback
+        self.initial_geometries = self._normalize_initial_geometries(initial_geometries)
+        self.initial_geometry_metadata = self._normalize_initial_geometry_metadata(initial_geometry_metadata)
 
         self._rng = np.random.default_rng(seed)
         self._history: list[dict[str, Any]] = []
@@ -164,6 +168,9 @@ class OptimizerBase(ABC):
                 "optimizer_backend": self.optimizer_backend,
                 "budget": self.budget,
                 "n_init": self.n_init,
+                "fixed_initial_geometries": (
+                    None if self.initial_geometries is None else self.initial_geometries.tolist()
+                ),
                 "seed": self.seed,
                 "candidate_space": self.candidate_space.describe(),
                 "simulator": self.simulator.__class__.__name__,
@@ -259,6 +266,9 @@ class OptimizerBase(ABC):
             self._rng = np.random.default_rng(checkpoint_seed)
 
     def _initial_selections(self) -> list[SelectionResult]:
+        fixed = self._fixed_initial_selection()
+        if fixed is not None:
+            return [fixed]
         candidates = self.candidate_space.sample_initial(1, self._rng)
         if len(candidates) == 0:
             return []
@@ -268,6 +278,27 @@ class OptimizerBase(ABC):
                 selection_debug={"mode": "init", "model_fit_status": "not_ready"},
             )
         ]
+
+    def _fixed_initial_selection(self) -> SelectionResult | None:
+        if self.initial_geometries is None:
+            return None
+        initial_index = len(self._history)
+        if initial_index >= len(self.initial_geometries):
+            raise RuntimeError(
+                f"Fixed initial geometry index {initial_index} is not available "
+                f"for n_init={self.n_init}"
+            )
+        metadata = dict(self.initial_geometry_metadata[initial_index])
+        selection_debug = {
+            "mode": "fixed_initial_geometry",
+            "model_fit_status": "not_ready",
+            "initial_index": int(initial_index),
+            **metadata,
+        }
+        return SelectionResult(
+            requested_geometry=np.asarray(self.initial_geometries[initial_index], dtype=float),
+            selection_debug=selection_debug,
+        )
 
     def _trial_from_record(self, record: SimulationRecord, *, iteration: int) -> dict[str, Any]:
         selection = record.selection
@@ -397,6 +428,9 @@ class OptimizerBase(ABC):
                 "budget": self.budget,
                 "n_init": self.n_init,
                 "candidate_space": self.candidate_space.describe(),
+                "fixed_initial_geometries": (
+                    None if self.initial_geometries is None else self.initial_geometries.tolist()
+                ),
             },
             "state": {
                 "evaluated_geometries": self.state.evaluated_geometries,
@@ -419,6 +453,39 @@ class OptimizerBase(ABC):
             "rng_state": self._rng.bit_generator.state,
         }
         self.checkpoint_path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
+
+    def _normalize_initial_geometries(
+        self,
+        rows: Sequence[Sequence[float]] | np.ndarray | None,
+    ) -> np.ndarray | None:
+        if rows is None:
+            return None
+        matrix = np.asarray(rows, dtype=float)
+        if matrix.ndim != 2:
+            raise ValueError("initial_geometries must be a 2D matrix")
+        expected_dim = len(self.candidate_space.variable_order)
+        if matrix.shape[1] != expected_dim:
+            raise ValueError(
+                f"initial_geometries dimension mismatch: got {matrix.shape[1]}, expected {expected_dim}"
+            )
+        if matrix.shape[0] < self.n_init:
+            raise ValueError(
+                f"initial_geometries must contain at least n_init={self.n_init} rows; got {matrix.shape[0]}"
+            )
+        return matrix.copy()
+
+    def _normalize_initial_geometry_metadata(
+        self,
+        rows: Sequence[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        if self.initial_geometries is None:
+            return []
+        if rows is None:
+            return [{} for _ in range(len(self.initial_geometries))]
+        metadata = [dict(row) for row in rows]
+        if len(metadata) < len(self.initial_geometries):
+            metadata.extend({} for _ in range(len(self.initial_geometries) - len(metadata)))
+        return metadata
 
     @staticmethod
     def _serializable_trial(trial: dict[str, Any]) -> dict[str, Any]:
