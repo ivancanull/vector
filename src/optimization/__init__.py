@@ -44,9 +44,11 @@ from .optimizer_base import (
 from .optimizer_bo import (
     BoTorchOptimizer,
     OnlineBOOptimizer,
+    OWAFSBNNOptimizer,
     OptimizerBoTorch,
 )
 from .bnn_acquisition import (
+    BNNCheckpointError,
     BNNExpectedImprovementAcquisition,
     BNNExpectedImprovementBackend,
     ScalarBNNConfig,
@@ -62,7 +64,7 @@ from .botorch_acquisition import (
 from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
 from .optimizer_lhs_random import OptimizerLHSRandom
 from .optimizer_random import OptimizerRandom
-from .simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
+from .simulators import HfssSimulator, OWAFSServerQueueSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
 from .surrogates import ANNSurrogate, BNNSurrogate, GPSurrogate, SurrogateModel
 from .types import EvaluationRecord
 
@@ -74,6 +76,7 @@ __all__ = [
     "BoTorchOptimizer",
     "AcquisitionFitResult",
     "BoTorchAcquisitionBackend",
+    "BNNCheckpointError",
     "BNNExpectedImprovementAcquisition",
     "BNNExpectedImprovementBackend",
     "BandMaxMetric",
@@ -111,7 +114,9 @@ __all__ = [
     "OptimizerBoTorch",
     "OptimizerLHSRandom",
     "OptimizerRandom",
+    "OWAFSBNNOptimizer",
     "OnlineANNOptimizer",
+    "OWAFSServerQueueSimulator",
     "PeakFrequencyMetric",
     "ResponseShapeEnvelopeMetric",
     "ResponseShapeEnvelopeSegment",

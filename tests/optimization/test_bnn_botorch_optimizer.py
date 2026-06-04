@@ -3,18 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from optimization.bnn_acquisition import (
+    BNNCheckpointError,
     BNNExpectedImprovementAcquisition,
     BNNExpectedImprovementBackend,
     ScalarBNNConfig,
     ScalarBNNRegressor,
 )
 from optimization.botorch_acquisition import GPqLogEIAcquisitionBackend
+from optimization.botorch_acquisition import AcquisitionFitResult
 from optimization.candidate_space import DiscreteCandidateSpace
 from optimization.datasets import PassiveDataset
 from optimization.optimization_spec import OptimizationSpec, SpecResults
-from optimization.optimizer_bo import OptimizerBoTorch
+from optimization.optimizer_base import SelectionResult
+from optimization.optimizer_bo import OWAFSBNNOptimizer, OptimizerBoTorch
 from optimization.recorder import ExperimentRecorder
 from optimization.simulators import ReplaySimulator, SimulationResult, Simulator
 
@@ -92,6 +96,20 @@ def _bclf_like_passive_dataset() -> PassiveDataset:
     )
 
 
+def _response_history(dataset: PassiveDataset, indices: list[int]) -> list[dict]:
+    history = []
+    for i in indices:
+        freqs, s_params = dataset.get_response_by_geometry(dataset.get_geometry(i))
+        history.append(
+            {
+                "geometry": dataset.get_geometry(i).tolist(),
+                "_response_freqs": freqs,
+                "_response_s_params": s_params,
+            }
+        )
+    return history
+
+
 def test_scalar_bnn_acquisition_scores_candidates() -> None:
     config = ScalarBNNConfig(hidden_dims=(8,), epochs=1, batch_size=2, mc_samples=4, bayesian_loss_weight=1e-5)
     surrogate = ScalarBNNRegressor(input_dim=2, config=config, seed=3, device="cpu")
@@ -160,6 +178,146 @@ def test_bnn_backend_warm_starts_like_fewshot_schedule() -> None:
     assert backend._last_fit_mode == "warm_start_update"
     assert id(backend._surrogate.model) == first_model_id  # type: ignore[union-attr]
     assert backend._surrogate.trained_epochs == 3  # type: ignore[union-attr]
+
+
+def test_bnn_backend_loads_checkpoint_without_initial_retraining(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "response_bnn.pt"
+    dataset = _bclf_like_passive_dataset()
+    indices = [0, 1]
+    X = np.asarray([dataset.get_geometry(i) for i in indices], dtype=np.float32)
+    y = np.asarray([[0.1], [0.0]], dtype=np.float32)
+    history = _response_history(dataset, indices)
+    base_config = {
+        "hidden_dims": [8],
+        "epochs": 2,
+        "update_epochs": 1,
+        "initial_train_size": 2,
+        "batch_size": 2,
+        "mc_samples": 4,
+        "bayesian_loss_weight": 1e-5,
+        "checkpoint_path": checkpoint_path,
+    }
+    training_backend = BNNExpectedImprovementBackend(
+        {**base_config, "force_retrain": True},
+        device="cpu",
+    )
+
+    first = training_backend.fit(
+        X,
+        y,
+        seed=23,
+        X_actual=X,
+        history=history,
+        optimization_spec=ScalarResponseSpec(),
+        variable_order=dataset.variable_order,
+    )
+    assert first.ready
+    saved_epochs = training_backend._surrogate.trained_epochs  # type: ignore[union-attr]
+    loading_backend = BNNExpectedImprovementBackend(
+        {**base_config, "require_checkpoint": True},
+        device="cpu",
+    )
+    second = loading_backend.fit(
+        X,
+        y,
+        seed=23,
+        X_actual=X,
+        history=history,
+        optimization_spec=ScalarResponseSpec(),
+        variable_order=dataset.variable_order,
+    )
+
+    assert second.ready
+    assert checkpoint_path.exists()
+    assert loading_backend._last_fit_mode == "checkpoint_load"
+    assert loading_backend._surrogate.trained_epochs == saved_epochs  # type: ignore[union-attr]
+    assert loading_backend._surrogate.checkpoint_metadata["train_count"] == 2  # type: ignore[union-attr]
+
+
+def test_bnn_backend_can_fit_and_load_fourier_surrogate(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "fourier_response_bnn.pt"
+    dataset = _bclf_like_passive_dataset()
+    indices = [0, 1]
+    X = np.asarray([dataset.get_geometry(i) for i in indices], dtype=np.float32)
+    y = np.asarray([[0.1], [0.0]], dtype=np.float32)
+    config = {
+        "hidden_dims": [8],
+        "epochs": 1,
+        "update_epochs": 1,
+        "initial_train_size": 2,
+        "batch_size": 2,
+        "mc_samples": 4,
+        "bayesian_loss_weight": 1e-5,
+        "checkpoint_path": checkpoint_path,
+        "surrogate_variant": "fourier",
+        "fourier_bands": [1, 2],
+        "include_raw_frequency": True,
+    }
+    training_backend = BNNExpectedImprovementBackend(
+        {**config, "force_retrain": True},
+        device="cpu",
+    )
+
+    first = training_backend.fit(
+        X,
+        y,
+        seed=31,
+        X_actual=X,
+        history=_response_history(dataset, indices),
+        optimization_spec=ScalarResponseSpec(),
+        variable_order=dataset.variable_order,
+    )
+    loading_backend = BNNExpectedImprovementBackend(
+        {**config, "require_checkpoint": True},
+        device="cpu",
+    )
+    second = loading_backend.fit(
+        X,
+        y,
+        seed=31,
+        X_actual=X,
+        history=_response_history(dataset, indices),
+        optimization_spec=ScalarResponseSpec(),
+        variable_order=dataset.variable_order,
+    )
+
+    assert first.ready
+    assert second.ready
+    assert checkpoint_path.exists()
+    assert training_backend._surrogate.surrogate_variant == "fourier"  # type: ignore[union-attr]
+    assert training_backend._surrogate.input_dim == 13  # type: ignore[union-attr]
+    assert loading_backend._last_fit_mode == "checkpoint_load"
+    assert loading_backend._surrogate.surrogate_variant == "fourier"  # type: ignore[union-attr]
+
+
+def test_bnn_backend_requires_checkpoint_when_configured(tmp_path: Path) -> None:
+    dataset = _bclf_like_passive_dataset()
+    indices = [0, 1]
+    X = np.asarray([dataset.get_geometry(i) for i in indices], dtype=np.float32)
+    y = np.asarray([[0.1], [0.0]], dtype=np.float32)
+    backend = BNNExpectedImprovementBackend(
+        {
+            "hidden_dims": [8],
+            "epochs": 1,
+            "batch_size": 2,
+            "mc_samples": 4,
+            "bayesian_loss_weight": 1e-5,
+            "checkpoint_path": tmp_path / "missing.pt",
+            "require_checkpoint": True,
+        },
+        device="cpu",
+    )
+
+    with pytest.raises(BNNCheckpointError, match="required"):
+        backend.fit(
+            X,
+            y,
+            seed=29,
+            X_actual=X,
+            history=_response_history(dataset, indices),
+            optimization_spec=ScalarResponseSpec(),
+            variable_order=dataset.variable_order,
+        )
 
 
 def test_optimizer_botorch_can_use_bnn_acquisition(tmp_path: Path) -> None:
@@ -276,3 +434,93 @@ def test_gp_and_bnn_backends_run_on_tiny_replay_dataset_without_repeats(tmp_path
         assert len(result.history) == 3
         assert len(set(requested)) == len(requested)
         assert len(set(actual)) == len(actual)
+
+
+def test_owafs_bnn_validation_row_does_not_consume_budget_and_replaces_training_label(
+    tmp_path: Path,
+) -> None:
+    class FakeBackend:
+        name = "fake_bnn"
+
+        def __init__(self) -> None:
+            self.fit_case_ids: list[list[str]] = []
+
+        def fit(self, X, y, *, history, **kwargs):  # type: ignore[no-untyped-def]
+            _ = X, y, kwargs
+            self.fit_case_ids.append([str(row.get("case_id")) for row in history])
+            return AcquisitionFitResult(ready=True)
+
+        def select(self, *, candidates_actual, candidates_normalized, history, tr_debug):  # type: ignore[no-untyped-def]
+            _ = candidates_normalized, history, tr_debug
+            return SelectionResult(requested_geometry=np.asarray(candidates_actual[0], dtype=float))
+
+        def predict_response_profile(self, geometry):  # type: ignore[no-untyped-def]
+            _ = geometry
+            return object()
+
+    class FakeOWAFSSimulator(Simulator):
+        def __init__(self) -> None:
+            super().__init__()
+            self.freqs = np.asarray([1.0, 2.0], dtype=float)
+            self.context_iteration = 0
+
+        def set_context(self, *, run_id: str, iteration: int) -> None:
+            _ = run_id
+            self.context_iteration = int(iteration)
+
+        def _result(self, geometry: np.ndarray, value: float, case_id: str, source: str) -> SimulationResult:
+            s_params = np.zeros((2, 2, len(self.freqs)), dtype=complex)
+            s_params[0, 0, :] = value
+            self.num_success += 1
+            return SimulationResult(
+                freqs=self.freqs,
+                s_params=s_params,
+                status="done",
+                metadata={"case_id": case_id, "job_id": case_id, "response_source": source},
+                actual_geometry=np.asarray(geometry, dtype=float),
+            )
+
+        def simulate(self, geometry: np.ndarray) -> SimulationResult:
+            self.num_calls += 1
+            return self._result(geometry, 1.0, f"init_{self.context_iteration}", "full")
+
+        def simulate_afs(self, geometry: np.ndarray, prediction) -> SimulationResult:  # type: ignore[no-untyped-def]
+            _ = prediction
+            self.num_calls += 1
+            return self._result(geometry, 0.05, f"afs_{self.context_iteration}", "afs_vf_reconstructed")
+
+        def simulate_full_validation(self, geometry: np.ndarray, *, case_id: str) -> SimulationResult:
+            self.num_calls += 1
+            return self._result(geometry, 0.1, case_id, "full_validation")
+
+    candidates = _bclf_like_candidates()
+    backend = FakeBackend()
+    optimizer = OWAFSBNNOptimizer(
+        candidate_space=DiscreteCandidateSpace(
+            variable_order=["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"],
+            candidate_geometries=candidates,
+        ),
+        simulator=FakeOWAFSSimulator(),
+        optimization_spec=ScalarResponseSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_owafs"),
+        budget=2,
+        n_init=1,
+        seed=3,
+        run_id="owafs_fake",
+        checkpoint_path=tmp_path / "owafs_fake.checkpoint.json",
+        acquisition_backend=backend,  # type: ignore[arg-type]
+    )
+
+    result = optimizer.run()
+    budgeted = [row for row in result.history if row.get("counts_toward_budget", True)]
+    validations = [row for row in result.history if not row.get("counts_toward_budget", True)]
+    shadow_rows = [row for row in result.history if row.get("exclude_from_model_training")]
+
+    assert len(budgeted) == 3
+    assert len(validations) == 2
+    assert all(row["phase"] == "validation" for row in validations)
+    assert shadow_rows and all(row["exclude_from_state"] for row in shadow_rows)
+    assert result.best_trial["phase"] == "validation"
+    assert result.state.best_objective == pytest.approx(0.1)
+    assert any("afs_1" not in fit_ids and "afs_2" not in fit_ids for fit_ids in backend.fit_case_ids[1:])
+    assert any(any(case_id.endswith("_full_validation") for case_id in fit_ids) for fit_ids in backend.fit_case_ids[1:])

@@ -35,17 +35,26 @@ from optimization import (  # noqa: E402
     ContinuousCandidateSpace,
     DiscreteCandidateSpace,
     ExperimentRecorder,
+    OWAFSBNNOptimizer,
+    OWAFSServerQueueSimulator,
     OptimizerBoTorch,
     OptimizerLHSRandom,
     ReplaySimulator,
     ServerQueueSimulator,
 )
+from afs import ObjectiveWeightedAFSConfig, VFFitConfig  # noqa: E402
 from simulation.core import SimulationInput  # noqa: E402
 from simulation.result_store import BandpassFilterNamingStrategy, FilesystemResultStore  # noqa: E402
 
 
-METHOD_CHOICES = ("bo", "lhs", "turbo", "bnn")
-METHOD_LABELS = {"bo": "BO", "lhs": "LHS", "turbo": "Turbo", "bnn": "BNN"}
+METHOD_CHOICES = ("bo", "lhs", "turbo", "bnn", "owafs_bnn")
+METHOD_LABELS = {
+    "bo": "BO",
+    "lhs": "LHS",
+    "turbo": "Turbo",
+    "bnn": "BNN",
+    "owafs_bnn": "Objective-Weighted + Uncertainty-Aware AFS",
+}
 
 
 class TeeStream:
@@ -342,6 +351,8 @@ class SharedOnlineExperimentConfig:
     output_dir: Path = REPO_ROOT / "experiments" / "online_lhs15_shared_init"
     bnn_checkpoint_dir: Path | None = None
     cache_dir: Path = REPO_ROOT / "data" / "bandpass_coupled_line_filter_export" / "ext"
+    afs_root: Path | None = None
+    owafs_sample_count: int = 20
     queue_root: Path = REPO_ROOT / "queue"
     server_job_timeout_sec: float = 0.0
     server_wait_on_failed: bool = True
@@ -374,6 +385,12 @@ class SharedOnlineExperimentConfig:
         return self.output_dir / "bnn_checkpoints"
 
     @property
+    def resolved_afs_root(self) -> Path:
+        if self.afs_root is not None:
+            return self.afs_root
+        return self.cache_dir / "afs"
+
+    @property
     def unit_map(self) -> dict[str, str]:
         return {
             "L": "mm",
@@ -399,6 +416,9 @@ class SharedOnlineExperimentConfig:
             "bayesian_loss_weight": 1e-4,
             "mc_samples": int(self.mc_samples),
             "acquisition": "qlogei",
+            "surrogate_variant": "fourier",
+            "fourier_bands": [1.0, 2.0, 4.0, 8.0, 16.0],
+            "include_raw_frequency": True,
         }
 
 
@@ -478,7 +498,11 @@ class SharedOnlineExperimentRunner:
                 run_result = optimizer.run()
                 latest_history_df = pd.DataFrame(run_result.history).sort_values("iteration").reset_index(drop=True)
                 latest_history_df["seed"] = seed
-                final_status = "completed" if len(latest_history_df) >= self.config.target_trials else "in_progress"
+                final_status = (
+                    "completed"
+                    if self._budgeted_history_count(latest_history_df) >= self.config.target_trials
+                    else "in_progress"
+                )
                 campaign_summary_df = self.upsert_campaign_row(
                     method,
                     self._summary_row_for_seed(method, seed, final_status, latest_history_df),
@@ -508,14 +532,16 @@ class SharedOnlineExperimentRunner:
         run_id = self.run_id_for_method_seed(method, seed)
         return self.method_output_dir(method) / f"{run_id}.checkpoint.json"
 
-    def bnn_checkpoint_for_seed(self, seed: int) -> Path:
-        return self.config.resolved_bnn_checkpoint_dir / f"bnn_lhs15_shared_seed{int(seed)}.bnn.pt"
+    def bnn_checkpoint_for_seed(self, seed: int, method: str = "bnn") -> Path:
+        method = str(method).lower()
+        stem = "bnn" if method == "bnn" else method
+        return self.config.resolved_bnn_checkpoint_dir / f"{stem}_lhs15_shared_seed{int(seed)}.bnn.pt"
 
-    def bnn_backend_config_for_seed(self, seed: int) -> dict[str, Any]:
+    def bnn_backend_config_for_seed(self, seed: int, method: str = "bnn") -> dict[str, Any]:
         payload = dict(self.config.bnn_backend_config)
         payload.update(
             {
-                "checkpoint_path": str(self.bnn_checkpoint_for_seed(seed)),
+                "checkpoint_path": str(self.bnn_checkpoint_for_seed(seed, method=method)),
                 "force_retrain": True,
                 "require_checkpoint": False,
                 "save_checkpoint": True,
@@ -537,6 +563,8 @@ class SharedOnlineExperimentRunner:
                 "method",
                 "status",
                 "num_trials",
+                "num_budgeted_trials",
+                "num_validations",
                 "best_objective",
                 "first_feasible_iteration",
                 "cache_hit_ratio",
@@ -573,8 +601,8 @@ class SharedOnlineExperimentRunner:
         if self.config.reset_checkpoint:
             if checkpoint_path.exists():
                 checkpoint_path.unlink()
-            if method == "bnn":
-                self.bnn_checkpoint_for_seed(seed).unlink(missing_ok=True)
+            if method in {"bnn", "owafs_bnn"}:
+                self.bnn_checkpoint_for_seed(seed, method=method).unlink(missing_ok=True)
             if self.config.clear_queue_artifacts_on_reset:
                 removed = self._cleanup_queue_artifacts_for_run(self.config.queue_root, run_id)
                 self._log(f"[ResetCleanup] run_id={run_id} {removed}")
@@ -613,7 +641,16 @@ class SharedOnlineExperimentRunner:
                 **common_kwargs,
                 retrain_every=self.config.retrain_every,
                 acquisition_backend=BNNExpectedImprovementBackend(
-                    self.bnn_backend_config_for_seed(seed),
+                    self.bnn_backend_config_for_seed(seed, method=method),
+                    device=self.config.device,
+                ),
+            )
+        elif method == "owafs_bnn":
+            optimizer = OWAFSBNNOptimizer(
+                **common_kwargs,
+                retrain_every=self.config.retrain_every,
+                acquisition_backend=BNNExpectedImprovementBackend(
+                    self.bnn_backend_config_for_seed(seed, method=method),
                     device=self.config.device,
                 ),
             )
@@ -622,7 +659,7 @@ class SharedOnlineExperimentRunner:
         else:
             raise ValueError(f"Unsupported method={method!r}")
 
-        if method == "bnn" and self.config.resume and checkpoint_path.exists() and len(optimizer._history):
+        if method in {"bnn", "owafs_bnn"} and self.config.resume and checkpoint_path.exists() and len(optimizer._history):
             self._rehydrate_history_responses(optimizer, simulator)
         return optimizer
 
@@ -640,7 +677,25 @@ class SharedOnlineExperimentRunner:
                 naming_strategy=BandpassFilterNamingStrategy(),
                 port_num=2,
             )
-            simulator = ServerQueueSimulator(
+            simulator_cls = OWAFSServerQueueSimulator if method == "owafs_bnn" else ServerQueueSimulator
+            simulator_kwargs: dict[str, Any] = {}
+            if method == "owafs_bnn":
+                simulator_kwargs.update(
+                    {
+                        "afs_root": self.config.resolved_afs_root / "owafs_bnn",
+                        "owafs_config": ObjectiveWeightedAFSConfig(
+                            sample_count=int(self.config.owafs_sample_count),
+                        ),
+                        "vf_config": VFFitConfig(
+                            n_poles_real=4,
+                            n_poles_complex=8,
+                            max_iter=30,
+                            tol=1e-7,
+                            order_policy="fixed",
+                        ),
+                    }
+                )
+            simulator = simulator_cls(
                 queue_root=str(self.config.queue_root),
                 variable_order=self.variable_order,
                 unit_map=self.config.unit_map,
@@ -657,9 +712,12 @@ class SharedOnlineExperimentRunner:
                 job_timeout_sec=self.config.server_job_timeout_sec,
                 wait_on_failed=self.config.server_wait_on_failed,
                 verbose=self.config.debug_verbose,
+                **simulator_kwargs,
             )
             return candidate_space, simulator
         if self.config.backend == "replay":
+            if method == "owafs_bnn":
+                raise ValueError("owafs_bnn requires --backend server because it submits explicit AFS frequency-point jobs")
             freq_cfg = self.cfg["data"]["freqs"]
             freqs = np.arange(freq_cfg["min"], freq_cfg["max"], freq_cfg["step"], dtype=float)
             replay_dataset = BCLFDataset.from_pickle(self.config.replay_dataset_path, freqs=freqs)
@@ -683,7 +741,10 @@ class SharedOnlineExperimentRunner:
     def is_seed_completed(self, method: str, seed: int) -> bool:
         if self.config.reset_checkpoint:
             return False
-        return len(self._checkpoint_history(method, seed)) >= self.config.target_trials
+        return self._history_budgeted_count(self._checkpoint_history(method, seed)) >= self.config.target_trials
+
+    def _history_budgeted_count(self, history: list[dict[str, Any]]) -> int:
+        return sum(1 for row in history if bool(dict(row).get("counts_toward_budget", True)))
 
     def _load_checkpoint_payload(self, method: str, seed: int) -> dict[str, Any] | None:
         checkpoint_path = self.checkpoint_for_method_seed(method, seed)
@@ -719,6 +780,8 @@ class SharedOnlineExperimentRunner:
             "method": METHOD_LABELS[method],
             "status": status,
             "num_trials": int(len(history_df)),
+            "num_budgeted_trials": self._budgeted_history_count(history_df),
+            "num_validations": self._validation_history_count(history_df),
             "best_objective": self._best_objective_from_history(history_df),
             "first_feasible_iteration": self._first_feasible_iteration(history_df),
             "cache_hit_ratio": self._cache_hit_ratio(history_df),
@@ -749,6 +812,18 @@ class SharedOnlineExperimentRunner:
             if np.isfinite(objective).any():
                 return float(np.nanmin(objective))
         return float("nan")
+
+    def _budgeted_history_count(self, history_df: pd.DataFrame) -> int:
+        if history_df.empty:
+            return 0
+        if "counts_toward_budget" not in history_df:
+            return int(len(history_df))
+        return int(history_df["counts_toward_budget"].fillna(True).astype(bool).sum())
+
+    def _validation_history_count(self, history_df: pd.DataFrame) -> int:
+        if history_df.empty or "counts_toward_budget" not in history_df:
+            return 0
+        return int((~history_df["counts_toward_budget"].fillna(True).astype(bool)).sum())
 
     def _cache_hit_ratio(self, history_df: pd.DataFrame) -> float:
         if history_df.empty or "cache_hit" not in history_df:
@@ -822,6 +897,27 @@ class SharedOnlineExperimentRunner:
                 stats["missing"] += 1
                 continue
             geometry_arr = np.asarray(geometry, dtype=float).reshape(-1)
+            metadata = dict(row.get("simulation_metadata") or {})
+            direct_touchstone = self._direct_rehydrate_touchstone(metadata)
+            if direct_touchstone is not None:
+                try:
+                    freqs, s_params = simulator._load_touchstone(direct_touchstone)  # type: ignore[attr-defined]
+                except Exception:
+                    stats["missing"] += 1
+                    continue
+                actual_geometry = geometry_arr
+                touchstone_path = str(direct_touchstone)
+                row["_response_freqs"] = np.asarray(freqs, dtype=float)
+                row["_response_s_params"] = np.asarray(s_params, dtype=complex)
+                row["geometry"] = np.asarray(actual_geometry, dtype=float).reshape(-1).tolist()
+                row["geometry_normalized"] = np.asarray(
+                    optimizer.candidate_space.normalize(np.asarray(actual_geometry, dtype=float)),
+                    dtype=float,
+                ).reshape(-1).tolist()
+                metadata["touchstone_path"] = touchstone_path
+                row["simulation_metadata"] = metadata
+                stats["rehydrated"] += 1
+                continue
 
             if isinstance(simulator, ReplaySimulator):
                 sim_result = simulator.simulate(geometry_arr)
@@ -862,6 +958,18 @@ class SharedOnlineExperimentRunner:
                 "until new in-memory responses are available."
             )
         return stats
+
+    def _direct_rehydrate_touchstone(self, metadata: dict[str, Any]) -> Path | None:
+        for key in ("vf_reconstructed_touchstone_path", "touchstone_path"):
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            path = Path(value)
+            if not path.is_absolute():
+                path = self.config.repo_root / path
+            if path.exists():
+                return path
+        return None
 
     def _cleanup_queue_artifacts_for_run(self, queue_root: Path, run_id: str) -> dict[str, int]:
         removed = {"pending": 0, "running": 0, "done": 0, "failed": 0}
@@ -904,6 +1012,8 @@ class SharedOnlineExperimentRunner:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         self.config.initial_design_dir.mkdir(parents=True, exist_ok=True)
         self.config.resolved_bnn_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        if "owafs_bnn" in self.config.methods:
+            self.config.resolved_afs_root.mkdir(parents=True, exist_ok=True)
         for method in self.config.methods:
             self.method_output_dir(method).mkdir(parents=True, exist_ok=True)
 
@@ -918,21 +1028,159 @@ class SharedOnlineExperimentRunner:
         self._log(f"budget: {self.config.budget}")
         self._log(f"target_trials: {self.config.target_trials}")
         self._log(f"cache_dir: {self.config.cache_dir}")
+        if "owafs_bnn" in self.config.methods:
+            self._log(f"afs_root: {self.config.resolved_afs_root}")
         self._log(f"initial_design_dir: {self.config.initial_design_dir}")
         self._log(f"bnn_checkpoint_dir: {self.config.resolved_bnn_checkpoint_dir}")
         self._log(f"backend: {self.config.backend}")
+        self._log_bnn_config()
+        self._log_owafs_bnn_config()
+
+    def _log_bnn_config(self) -> None:
+        if not any(method in self.config.methods for method in ("bnn", "owafs_bnn")):
+            return
+        summary = self._bnn_log_summary()
+        network = summary["network"]
+        training = summary["training"]
+        acquisition = summary["acquisition"]
+        frequency = summary["frequency_encoding"]
+        checkpoint = summary["checkpoint_policy"]
+        self._log(
+            "[BNNConfig] type="
+            f"{summary['surrogate_variant']} response_surrogate=true target_mode={summary['target_mode']}"
+        )
+        self._log(
+            "[BNNConfig] input_dim="
+            f"{summary['input_dim']} geometry_dim={summary['geometry_dim']} "
+            f"frequency_feature_dim={summary['frequency_feature_dim']} "
+            f"frequency_encoding={frequency}"
+        )
+        self._log(
+            "[BNNConfig] network/training="
+            f"hidden_dims={network['hidden_dims']} prior_sigma={network['prior_sigma']} "
+            f"initial_epochs={training['initial_epochs']} update_epochs={training['update_epochs']} "
+            f"warm_start={training['warm_start']} initial_train_size={training['initial_train_size']} "
+            f"batch_size={training['batch_size']} lr={training['lr']} "
+            f"bayesian_loss_weight={training['bayesian_loss_weight']}"
+        )
+        self._log(
+            "[BNNConfig] acquisition="
+            f"{acquisition['name']} mc_samples={acquisition['mc_samples']} beta={acquisition['beta']}"
+        )
+        self._log(
+            "[BNNConfig] checkpoint_policy="
+            f"dir={checkpoint['dir']} pattern={checkpoint['per_seed_pattern']} "
+            f"force_retrain={checkpoint['force_retrain']} "
+            f"require_checkpoint={checkpoint['require_checkpoint']} "
+            f"save_checkpoint={checkpoint['save_checkpoint']}"
+        )
+        self._log(f"[BNNConfigJSON] {json.dumps(summary, sort_keys=True)}")
+
+    def _log_owafs_bnn_config(self) -> None:
+        if "owafs_bnn" not in self.config.methods:
+            return
+        summary = {
+            "method": "owafs_bnn",
+            "display_name": METHOD_LABELS["owafs_bnn"],
+            "afs_root": str(self.config.resolved_afs_root / "owafs_bnn"),
+            "sample_count": int(self.config.owafs_sample_count),
+            "initial_anchor_count": 9,
+            "boundary_ghz": [3.6, 4.4, 4.8, 5.4, 5.8],
+            "score_formula": "band_weight * 0.5 * (rank01(vf_residual_db) + rank01(mc_uncertainty_db))",
+            "band_weights": {"boundary": 2.0, "passband": 1.5, "stopband": 1.25, "else": 1.0},
+            "vf": {
+                "n_poles_real": 4,
+                "n_poles_complex": 8,
+                "max_iter": 30,
+                "tol": 1e-7,
+                "order_policy": "fixed",
+            },
+            "validation_policy": {
+                "trigger": "afs_vf_objective_improves_current_best",
+                "recording": "append_full_validation_trial",
+                "counts_toward_budget": False,
+                "paired_afs_row_excluded_from_training": True,
+            },
+        }
+        self._log(
+            "[ObjectiveWeightedUncertaintyAwareAFSConfig] "
+            f"display_name={summary['display_name']} "
+            f"sample_count={summary['sample_count']} afs_root={summary['afs_root']} "
+            f"vf={summary['vf']} validation={summary['validation_policy']}"
+        )
+        self._log(f"[ObjectiveWeightedUncertaintyAwareAFSConfigJSON] {json.dumps(summary, sort_keys=True)}")
+
+    def _bnn_log_summary(self) -> dict[str, Any]:
+        config = dict(self.config.bnn_backend_config)
+        variant = str(config.get("surrogate_variant", "raw")).strip().lower()
+        geometry_dim = len(self.variable_order)
+        if variant == "fourier":
+            bands = [float(v) for v in config.get("fourier_bands", [])]
+            include_raw_frequency = bool(config.get("include_raw_frequency", True))
+            frequency_feature_dim = (1 if include_raw_frequency else 0) + 2 * len(bands)
+            frequency_encoding: dict[str, Any] = {
+                "kind": "fourier",
+                "bands": bands,
+                "include_raw_frequency": include_raw_frequency,
+                "raw_frequency_scale": "normalized_0_1" if include_raw_frequency else None,
+                "sin_cos_feature_dim": 2 * len(bands),
+                "frequency_bounds_source": "fit_dataset_min_max",
+            }
+        else:
+            frequency_feature_dim = 1
+            frequency_encoding = {
+                "kind": "raw",
+                "raw_frequency_scale": "hz",
+                "frequency_bounds_source": None,
+            }
+        return {
+            "surrogate_variant": variant,
+            "target_mode": "db",
+            "geometry_dim": int(geometry_dim),
+            "frequency_feature_dim": int(frequency_feature_dim),
+            "input_dim": int(geometry_dim + frequency_feature_dim),
+            "frequency_encoding": frequency_encoding,
+            "network": {
+                "hidden_dims": list(config.get("hidden_dims", [])),
+                "prior_sigma": float(config.get("prior_sigma", 0.1)),
+            },
+            "training": {
+                "initial_epochs": int(config.get("epochs", 0)),
+                "update_epochs": int(config.get("update_epochs", 0)),
+                "warm_start": bool(config.get("warm_start", True)),
+                "initial_train_size": int(config.get("initial_train_size", self.config.n_init)),
+                "batch_size": int(config.get("batch_size", 0)),
+                "lr": float(config.get("lr", 0.0)),
+                "bayesian_loss_weight": float(config.get("bayesian_loss_weight", 0.0)),
+            },
+            "acquisition": {
+                "name": str(config.get("acquisition", "qlogei")),
+                "mc_samples": int(config.get("mc_samples", self.config.mc_samples)),
+                "beta": float(config.get("beta", 2.0)),
+            },
+            "checkpoint_policy": {
+                "dir": str(self.config.resolved_bnn_checkpoint_dir),
+                "per_seed_pattern": "{method}_lhs15_shared_seed{seed}.bnn.pt",
+                "force_retrain": True,
+                "require_checkpoint": False,
+                "save_checkpoint": True,
+            },
+        }
 
     def _log_planned_jobs(self, initial_designs: dict[int, SharedInitialDesign]) -> None:
         rows = []
         for method in self.config.methods:
             for seed in self.config.seeds:
                 seed = int(seed)
+                bnn_checkpoint = str(self.bnn_checkpoint_for_seed(seed, method=method)) if method in {"bnn", "owafs_bnn"} else ""
                 rows.append(
                     {
                         "method": method,
                         "seed": seed,
                         "run_id": self.run_id_for_method_seed(method, seed),
                         "checkpoint": str(self.checkpoint_for_method_seed(method, seed)),
+                        "bnn_checkpoint": bnn_checkpoint,
+                        "afs_root": str(self.config.resolved_afs_root / "owafs_bnn") if method == "owafs_bnn" else "",
                         "initial_design": str(initial_designs[seed].path),
                         "initial_points": len(initial_designs[seed].selected_rows),
                     }
@@ -957,6 +1205,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, default=Path("experiments/online_lhs15_shared_init"))
     parser.add_argument("--config-path", type=Path, default=Path("configs/filter_bnn_online_uaw_uaw.yaml"))
     parser.add_argument("--cache-dir", type=Path, default=Path("data/bandpass_coupled_line_filter_export/ext"))
+    parser.add_argument("--afs-root", type=Path, default=None)
+    parser.add_argument("--owafs-sample-count", type=int, default=20)
     parser.add_argument("--queue-root", type=Path, default=Path("queue"))
     parser.add_argument("--server-job-timeout-sec", type=float, default=0.0)
     parser.add_argument("--server-wait-on-failed", action=argparse.BooleanOptionalAction, default=True)
@@ -1018,6 +1268,8 @@ def config_from_args(args: argparse.Namespace) -> SharedOnlineExperimentConfig:
         output_dir=resolve_path(args.output_dir),
         bnn_checkpoint_dir=None if args.bnn_checkpoint_dir is None else resolve_path(args.bnn_checkpoint_dir),
         cache_dir=resolve_path(args.cache_dir),
+        afs_root=None if args.afs_root is None else resolve_path(args.afs_root),
+        owafs_sample_count=int(args.owafs_sample_count),
         queue_root=resolve_path(args.queue_root),
         server_job_timeout_sec=float(args.server_job_timeout_sec),
         server_wait_on_failed=bool(args.server_wait_on_failed),
@@ -1036,7 +1288,7 @@ def config_from_args(args: argparse.Namespace) -> SharedOnlineExperimentConfig:
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    for name in ("n_init", "budget", "pool_size", "retrain_every", "initial_epochs", "update_epochs", "mc_samples", "debug_print_every"):
+    for name in ("n_init", "budget", "pool_size", "retrain_every", "initial_epochs", "update_epochs", "mc_samples", "debug_print_every", "owafs_sample_count"):
         if int(getattr(args, name)) <= 0:
             parser.error(f"--{name.replace('_', '-')} must be > 0")
     if not args.seeds:

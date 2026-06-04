@@ -174,6 +174,12 @@ cython_debug/
 *.png
 *.pdf
 *.gif
+!docs/paper/assets/
+!docs/paper/assets/uaw_afs_ext_offline_reproduction/
+!docs/paper/assets/uaw_afs_ext_offline_reproduction/**
+!docs/paper/assets/uaw_afs_ext_offline_reproduction/**/*.csv
+!docs/paper/assets/uaw_afs_ext_offline_reproduction/**/*.pdf
+!docs/paper/assets/uaw_afs_ext_offline_reproduction/**/*.png
 
 # slurm output
 *.err
@@ -203,6 +209,13 @@ plot_utils.py
 experiments/
 !experiments/
 /experiments/**/*.json
+!/experiments/uaw_afs_single_case/
+!/experiments/uaw_afs_single_case/README.md
+/experiments/uaw_afs_single_case/*.csv
+/experiments/uaw_afs_single_case/*.json
+/experiments/uaw_afs_single_case/*.snp
+/experiments/uaw_afs_single_case/*.s?p
+/experiments/uaw_afs_single_case/plots/
 !/experiments/hfss_skill_playground/
 !/experiments/hfss_skill_playground/README.md
 !/experiments/hfss_skill_playground/cases.yaml
@@ -231,3 +244,6 @@ TMUX_JUPYTER_CHEATSHEET.md
 !/logs/hfss_runs/
 !/logs/hfss_runs/.gitkeep
 /executed_notebooks/
+
+docs/paper/assets/
+submissions/archive/

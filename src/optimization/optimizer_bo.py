@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
 
 from .botorch_acquisition import BoTorchAcquisitionBackend, GPqLogEIAcquisitionBackend
-from .optimizer_base import OptimizerBase, SelectionResult
+from .optimizer_base import OptimizerBase, SelectionResult, SimulationRecord
 
 
 class OptimizerBoTorch(OptimizerBase):
@@ -75,6 +76,7 @@ class OptimizerBoTorch(OptimizerBase):
             row
             for row in self._history
             if row.get("simulation_status") == "done" and np.isfinite(float(row.get("objective", float("inf"))))
+            and not bool(row.get("exclude_from_model_training", False))
         ]
         if not valid_trials:
             self._model_ready = False
@@ -301,3 +303,132 @@ class OptimizerBoTorch(OptimizerBase):
 
 BoTorchOptimizer = OptimizerBoTorch
 OnlineBOOptimizer = OptimizerBoTorch
+
+
+class OWAFSBNNOptimizer(OptimizerBoTorch):
+    """BNN optimizer that evaluates post-init proposals with OWAFS + VF."""
+
+    optimizer_backend = "owafs_bnn"
+
+    def run_simulations(self, selections: list[SelectionResult], *, iteration: int) -> list[SimulationRecord]:
+        records: list[SimulationRecord] = []
+        for selection in selections:
+            t_sim_start = time.perf_counter()
+            if iteration < self.n_init:
+                simulation = self.simulator.simulate(selection.requested_geometry)
+            else:
+                predict_profile = getattr(self.acquisition_backend, "predict_response_profile", None)
+                simulate_afs = getattr(self.simulator, "simulate_afs", None)
+                if not callable(predict_profile):
+                    raise RuntimeError("OWAFSBNNOptimizer requires a BNN acquisition backend with predict_response_profile")
+                if not callable(simulate_afs):
+                    raise RuntimeError("OWAFSBNNOptimizer requires a simulator with simulate_afs")
+                prediction = predict_profile(selection.requested_geometry)
+                simulation = simulate_afs(selection.requested_geometry, prediction)
+            t_sim = float(time.perf_counter() - t_sim_start)
+            self._sim_elapsed_total += t_sim
+            records.append(SimulationRecord(selection=selection, simulation=simulation, t_simulator_sec=t_sim))
+        return records
+
+    def collect_post_simulation_data(
+        self,
+        records: list[SimulationRecord],
+        *,
+        iteration: int,
+    ) -> list[dict[str, Any]]:
+        trials = super().collect_post_simulation_data(records, iteration=iteration)
+        if iteration < self.n_init:
+            return trials
+
+        out: list[dict[str, Any]] = []
+        for trial in trials:
+            out.append(trial)
+            if not self._should_full_validate(trial):
+                trial["full_validation_triggered"] = False
+                continue
+            validation_case_id = self._validation_case_id(trial)
+            trial["full_validation_triggered"] = True
+            trial["full_validation_case_id"] = validation_case_id
+            trial["afs_vf_objective_estimate"] = float(trial["objective"])
+            trial["exclude_from_model_training"] = True
+            trial["exclude_from_state"] = True
+            trial["best_so_far"] = self.state.best_objective
+            metadata = dict(trial.get("simulation_metadata") or {})
+            metadata.update(
+                {
+                    "full_validation_triggered": True,
+                    "full_validation_case_id": validation_case_id,
+                    "afs_vf_objective_estimate": float(trial["objective"]),
+                }
+            )
+            trial["simulation_metadata"] = metadata
+
+            validation_record = self._run_full_validation(trial, validation_case_id, iteration=iteration)
+            validation_trial = self._trial_from_record(validation_record, iteration=iteration)
+            validation_trial.update(
+                {
+                    "phase": "validation",
+                    "counts_toward_budget": False,
+                    "validation_for_case_id": trial.get("case_id"),
+                    "validation_for_iteration": int(trial.get("iteration", iteration)),
+                    "validation_for_objective_estimate": float(trial["objective"]),
+                    "full_validation_triggered": False,
+                    "exclude_from_model_training": False,
+                    "exclude_from_state": False,
+                }
+            )
+            validation_metadata = dict(validation_trial.get("simulation_metadata") or {})
+            validation_metadata.update(
+                {
+                    "validation_for_case_id": trial.get("case_id"),
+                    "validation_for_iteration": int(trial.get("iteration", iteration)),
+                    "validation_for_objective_estimate": float(trial["objective"]),
+                }
+            )
+            validation_trial["simulation_metadata"] = validation_metadata
+            trial["full_validation_status"] = validation_trial.get("simulation_status")
+            trial["full_validation_objective"] = validation_trial.get("objective")
+            out.append(validation_trial)
+        return out
+
+    def _should_full_validate(self, trial: dict[str, Any]) -> bool:
+        if trial.get("simulation_status") != "done":
+            return False
+        objective = float(trial.get("objective", float("inf")))
+        if not np.isfinite(objective):
+            return False
+        if self.state.best_objective is None:
+            return True
+        return objective < float(self.state.best_objective)
+
+    def _run_full_validation(
+        self,
+        trial: dict[str, Any],
+        validation_case_id: str,
+        *,
+        iteration: int,
+    ) -> SimulationRecord:
+        simulate_full_validation = getattr(self.simulator, "simulate_full_validation", None)
+        if not callable(simulate_full_validation):
+            raise RuntimeError("OWAFSBNNOptimizer requires a simulator with simulate_full_validation")
+        selection = SelectionResult(
+            requested_geometry=np.asarray(trial["requested_geometry"], dtype=float),
+            predicted_mean=trial.get("predicted_mean"),
+            predicted_uncertainty=trial.get("predicted_uncertainty"),
+            acquisition_score=trial.get("acquisition_score"),
+            selection_debug={
+                "mode": "full_validation",
+                "model_fit_status": "not_applicable",
+                "validation_for_case_id": trial.get("case_id"),
+                "validation_for_iteration": int(trial.get("iteration", iteration)),
+            },
+        )
+        t_sim_start = time.perf_counter()
+        simulation = simulate_full_validation(selection.requested_geometry, case_id=validation_case_id)
+        t_sim = float(time.perf_counter() - t_sim_start)
+        self._sim_elapsed_total += t_sim
+        return SimulationRecord(selection=selection, simulation=simulation, t_simulator_sec=t_sim)
+
+    def _validation_case_id(self, trial: dict[str, Any]) -> str:
+        base = str(trial.get("case_id") or trial.get("job_id") or f"{self.run_id}_it{int(trial['iteration']):04d}")
+        return f"{base}_full_validation"

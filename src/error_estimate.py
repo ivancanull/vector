@@ -1,6 +1,9 @@
 import re
 import numpy as np
-from .utils import get_cindex, sort_poles_residues
+try:
+    from .utils import get_cindex, sort_poles_residues
+except ImportError:  # pragma: no cover - PYTHONPATH=src import style
+    from utils import get_cindex, sort_poles_residues
 
 __all__ = ["fitted_error_estimate", "poles_residues_error_estimate"]
 

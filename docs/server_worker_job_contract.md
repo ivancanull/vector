@@ -117,3 +117,24 @@ This check imports the installed AEDT Python package, verifies the PyAEDT API
 signatures used by the worker, validates job normalization, verifies queue JSON
 emission, and checks the worker setup-designer call shape. It does not open AEDT
 or mutate `.aedt` projects.
+
+## UAW/AFS 20-Point Timing Smoke
+
+The UAW/AFS frequency-point smoke notebook is
+`notebooks/uaw_afs_frequency_points_contract.ipynb`. It samples 20 deterministic
+frequency points from an existing BCLF Touchstone grid and submits a worker job
+with `frequency_points_ghz`.
+
+Measured on the BCLF template:
+
+| Run | Job | Frequency rows | HFSS solve time | Worker total time |
+| --- | --- | ---: | ---: | ---: |
+| Full sweep, same geometry | `turbo_online_general_seed0_it0067` | template sweep | 395 s (6m35s) | about 395 s |
+| UAW/AFS explicit points | `uaw_afs_Bandpass_Coupled_Line_Filter_export_Bandpass_Cou_fcaa3c35_seed0_n20` | 20 | 221 s (3m41s) | 222.6 s (3m42.6s) |
+
+For this same-geometry comparison, the 20-point job saved 174 s, reducing solve
+time by about 44.1 percent and giving about 1.79x speedup. Across 1129 historical
+BCLF full-sweep logs without `frequency_points_ghz`, the full-sweep median solve
+time was 397 s (6m37s), with mean 419.7 s and interquartile range 351-482 s.
+The single-case vector-fitting reconstruction record is in
+[`experiments/uaw_afs_single_case/README.md`](../experiments/uaw_afs_single_case/README.md).

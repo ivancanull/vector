@@ -9,7 +9,7 @@ Usage:
 Runs selected LHS15 shared-init methods sequentially in the current shell/tmux
 window. This script does not create a tmux session or window.
 
-By default it runs all methods: bo lhs turbo bnn.
+By default it runs all methods: bo lhs turbo bnn owafs_bnn.
 Set ONLINE_LHS15_METHODS to choose a subset, for example:
   ONLINE_LHS15_METHODS="bo turbo" notebooks/scripts/online_lhs15_shared/run_selected_methods_in_tmux_window.sh --seeds 0
 
@@ -27,7 +27,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || realpath "$script_dir/../../..")"
 cd "$repo_root"
 
-methods="${ONLINE_LHS15_METHODS:-bo lhs turbo bnn}"
+methods="${ONLINE_LHS15_METHODS:-bo lhs turbo bnn owafs_bnn}"
 for method in $methods; do
   case "$method" in
     bo)
@@ -41,6 +41,9 @@ for method in $methods; do
       ;;
     bnn)
       notebooks/scripts/online_lhs15_shared/bnn/run_bnn_in_tmux_window.sh "$@"
+      ;;
+    owafs_bnn)
+      notebooks/scripts/online_lhs15_shared/owafs_bnn/run_owafs_bnn_in_tmux_window.sh "$@"
       ;;
     *)
       echo "Unsupported method in ONLINE_LHS15_METHODS: $method" >&2

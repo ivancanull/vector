@@ -1,8 +1,13 @@
 from typing import Tuple, List
 import numpy as np
-from .utils import frequency_to_s, get_cindex, sort_poles_residues
-from .error_estimate import fitted_error_estimate
-from .complex_func import FunctionAbstract
+try:
+    from .utils import frequency_to_s, get_cindex, sort_poles_residues
+    from .error_estimate import fitted_error_estimate
+    from .complex_func import FunctionAbstract
+except ImportError:  # pragma: no cover - PYTHONPATH=src import style
+    from utils import frequency_to_s, get_cindex, sort_poles_residues
+    from error_estimate import fitted_error_estimate
+    from complex_func import FunctionAbstract
 
 VF_DEBUG = False
 __all__ = ["vector_fit", "evaluate"]
@@ -394,4 +399,3 @@ def vector_fit(freq,
         rms_error = fitted_error_estimate(Z, Z_fit, method="RMSE")
         print(f'RMSE: {rms_error:.2E}')
     return poles, residues, d, h
-

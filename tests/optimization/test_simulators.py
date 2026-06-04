@@ -8,7 +8,8 @@ import numpy as np
 from common.io_utils import write_json
 from optimization.datasets import PassiveDataset
 import optimization.simulators as simulators_module
-from optimization.simulators import HfssSimulator, ReplaySimulator, ServerQueueSimulator
+from optimization.simulators import HfssSimulator, OWAFSServerQueueSimulator, ReplaySimulator, ServerQueueSimulator
+from afs import ObjectiveWeightedAFSConfig
 
 
 class _FakeCached:
@@ -165,6 +166,77 @@ def test_server_queue_simulator_cache_hit_skips_enqueue(tmp_path: Path, monkeypa
     assert store.lookup_calls == 1
     assert store.save_calls == 0
     assert list((queue_root / "pending").glob("*.json")) == []
+
+
+def test_owafs_server_queue_simulator_writes_afs_artifacts_outside_full_cache(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    queue_root = tmp_path / "queue"
+    for name in ("pending", "running", "done", "failed", "results"):
+        (queue_root / name).mkdir(parents=True, exist_ok=True)
+    cache_root = tmp_path / "ext"
+    afs_root = cache_root / "afs"
+    store = _FakeStore(cached_path=None)
+    simulator = OWAFSServerQueueSimulator(
+        queue_root=str(queue_root),
+        variable_order=["L", "W"],
+        unit_map={"L": "mm", "W": "mm"},
+        template_name="bclf_template_v1",
+        port_num=2,
+        result_store=store,
+        run_id="owafs",
+        owafs_config=ObjectiveWeightedAFSConfig(sample_count=3, initial_anchor_count=3),
+        afs_root=afs_root,
+        poll_interval_sec=0.01,
+        job_timeout_sec=0.1,
+    )
+    simulator.set_context(run_id="owafs", iteration=1)
+    job_id = "owafs_it0001"
+    raw = queue_root / "results" / f"{job_id}.s2p"
+    raw.write_text(
+        "# Hz S RI R 50\n"
+        "1 0.1 0 0.2 0 0.2 0 0.1 0\n"
+        "2 0.1 0 0.2 0 0.2 0 0.1 0\n"
+        "3 0.1 0 0.2 0 0.2 0 0.1 0\n",
+        encoding="utf-8",
+    )
+    result_json = queue_root / "done" / f"{job_id}.result.json"
+
+    def _wait(_case_id: str):  # type: ignore[no-untyped-def]
+        result_json.write_text(
+            (
+                "{\n"
+                f'  "job_id": "{job_id}",\n'
+                '  "status": "done",\n'
+                f'  "artifacts": {{"touchstone": "results/{job_id}.s2p"}}\n'
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        return {"status": "done", "result_json_path": result_json, "wait_seconds": 0.0, "queue_root": queue_root}
+
+    def _reconstruct(_sample_freqs, _sample_s, target_freqs, *, config=None):  # type: ignore[no-untyped-def]
+        return np.zeros((2, 2, len(target_freqs)), dtype=complex)
+
+    monkeypatch.setattr(simulator, "_wait_job_result", _wait)
+    monkeypatch.setattr(simulators_module, "reconstruct_sparams_vf", _reconstruct)
+
+    class Prediction:
+        freqs = np.asarray([1.0, 2.0, 3.0, 4.0], dtype=float)
+        mean_s_params = np.zeros((2, 2, 4), dtype=complex)
+        response_samples = np.zeros((2, 2, 2, 4), dtype=complex)
+
+    out = simulator.simulate_afs(np.asarray([7.8, 1.0]), Prediction())
+
+    pending_payload = (queue_root / "pending" / f"{job_id}.json").read_text(encoding="utf-8")
+    assert out.status == "done"
+    assert out.metadata is not None
+    assert out.metadata["response_source"] == "afs_vf_reconstructed"
+    assert '"frequency_points_ghz"' in pending_payload
+    assert Path(out.metadata["afs_raw_touchstone_path"]).is_relative_to(afs_root)
+    assert Path(out.metadata["vf_reconstructed_touchstone_path"]).is_relative_to(afs_root)
+    assert store.save_calls == 0
 
 
 def test_server_queue_simulator_cache_miss_done_and_save(tmp_path: Path, monkeypatch) -> None:

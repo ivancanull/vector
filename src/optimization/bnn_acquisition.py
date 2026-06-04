@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -10,9 +11,9 @@ from .optimizer_base import SelectionResult
 from .optimization_spec import OptimizationSpec
 
 try:
-    from src.modeling import BCLFResponseDataset, LegacyBNNResponseSurrogate
+    from src.modeling import BCLFResponseDataset, FourierBNNResponseSurrogate, LegacyBNNResponseSurrogate
 except ImportError:  # pragma: no cover - tests often put src/ directly on PYTHONPATH
-    from modeling import BCLFResponseDataset, LegacyBNNResponseSurrogate
+    from modeling import BCLFResponseDataset, FourierBNNResponseSurrogate, LegacyBNNResponseSurrogate
 
 try:
     from src.bayesian.modules.loss import BKLLoss
@@ -38,13 +39,52 @@ class ScalarBNNConfig:
     mc_samples: int = 64
     acquisition: str = "qlogei"
     beta: float = 2.0
+    checkpoint_path: str | None = None
+    force_retrain: bool = False
+    require_checkpoint: bool = False
+    save_checkpoint: bool = True
+    surrogate_variant: str = "raw"
+    fourier_bands: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
+    include_raw_frequency: bool = True
+    frequency_min_hz: float | None = None
+    frequency_max_hz: float | None = None
+
+    def __post_init__(self) -> None:
+        variant = str(self.surrogate_variant).strip().lower()
+        if variant not in {"raw", "fourier"}:
+            raise ValueError("surrogate_variant must be 'raw' or 'fourier'")
+        bands = tuple(float(v) for v in self.fourier_bands)
+        if variant == "fourier" and not bands:
+            raise ValueError("fourier_bands must be non-empty when surrogate_variant='fourier'")
+        object.__setattr__(self, "surrogate_variant", variant)
+        object.__setattr__(self, "fourier_bands", bands)
 
     @classmethod
     def from_mapping(cls, values: dict[str, Any] | None) -> "ScalarBNNConfig":
         payload = dict(values or {})
         if "hidden_dims" in payload:
             payload["hidden_dims"] = tuple(int(v) for v in payload["hidden_dims"])
+        if "fourier_bands" in payload and payload["fourier_bands"] is not None:
+            payload["fourier_bands"] = tuple(float(v) for v in payload["fourier_bands"])
+        if payload.get("checkpoint_path") is not None:
+            payload["checkpoint_path"] = str(payload["checkpoint_path"])
         return cls(**payload)
+
+
+class BNNCheckpointError(Exception):
+    """Raised when an explicitly configured BNN checkpoint cannot be used."""
+
+
+@dataclass(frozen=True)
+class BNNResponsePrediction:
+    freqs: np.ndarray
+    mean_s_params: np.ndarray
+    response_samples: np.ndarray
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "freqs", np.asarray(self.freqs, dtype=float).reshape(-1))
+        object.__setattr__(self, "mean_s_params", np.asarray(self.mean_s_params, dtype=complex))
+        object.__setattr__(self, "response_samples", np.asarray(self.response_samples, dtype=complex))
 
 
 class _TargetStandardizer:
@@ -320,28 +360,45 @@ class BNNExpectedImprovementBackend:
                 raise ValueError("BNN response acquisition requires optimization_spec")
             self._optimization_spec = optimization_spec
             train_indices = np.arange(dataset.n_samples, dtype=int)
+            checkpoint_changed = False
             if self._should_warm_start(dataset):
                 assert self._surrogate is not None
                 self._surrogate.update(dataset, train_indices, epochs=int(self.config.update_epochs))
                 self._last_fit_mode = "warm_start_update"
+                checkpoint_changed = True
+            elif (
+                self._surrogate is not None
+                and self._surrogate.is_fitted
+                and int(dataset.n_samples) == int(self._last_train_count)
+            ):
+                self._last_fit_mode = "reuse_fitted"
             else:
-                surrogate = LegacyBNNResponseSurrogate(
-                    hidden_dims=list(self.config.hidden_dims),
-                    prior_sigma=float(self.config.prior_sigma),
-                    epochs=int(self._initial_epoch_count(dataset.n_samples)),
-                    batch_size=int(self.config.batch_size),
-                    lr=float(self.config.lr),
-                    bayesian_loss_weight=float(self.config.bayesian_loss_weight),
-                    mc_samples=int(self.config.mc_samples),
-                    target_mode="db",
-                    seed=0 if seed is None else int(seed),
-                    device=str(self._device),
-                )
-                surrogate.fit(dataset, train_indices, epochs=self._initial_epoch_count(dataset.n_samples))
-                self._surrogate = surrogate
-                self._last_fit_mode = "initial_fit"
+                loaded_train_count = self._load_checkpoint_if_available(dataset)
+                if loaded_train_count is not None:
+                    assert self._surrogate is not None
+                    stale_count = int(dataset.n_samples) - int(loaded_train_count)
+                    if stale_count > 0:
+                        # A persisted checkpoint can lag the optimizer history after an interrupted run.
+                        # Continue from the checkpoint for the missed online updates instead of refitting.
+                        self._surrogate.update(
+                            dataset,
+                            train_indices,
+                            epochs=int(stale_count) * int(self.config.update_epochs),
+                        )
+                        self._last_fit_mode = "checkpoint_load_warm_start_update"
+                        checkpoint_changed = True
+                    else:
+                        self._last_fit_mode = "checkpoint_load"
+                else:
+                    surrogate = self._build_response_surrogate(dataset, seed=seed)
+                    surrogate.fit(dataset, train_indices, epochs=self._initial_epoch_count(dataset.n_samples))
+                    self._surrogate = surrogate
+                    self._last_fit_mode = "initial_fit"
+                    checkpoint_changed = True
             self._train_dataset = dataset
             self._last_train_count = int(dataset.n_samples)
+            if checkpoint_changed:
+                self._save_checkpoint_if_configured(dataset, seed=seed)
             return AcquisitionFitResult(ready=True)
         except (RuntimeError, ValueError, FloatingPointError) as exc:
             self._surrogate = None
@@ -350,6 +407,140 @@ class BNNExpectedImprovementBackend:
             self._last_train_count = 0
             self._last_fit_mode = "failed"
             return AcquisitionFitResult(ready=False, error=f"{type(exc).__name__}: {exc}")
+
+    def _checkpoint_path(self) -> Path | None:
+        return None if self.config.checkpoint_path is None else Path(self.config.checkpoint_path)
+
+    def _load_checkpoint_if_available(self, dataset: BCLFResponseDataset) -> int | None:
+        path = self._checkpoint_path()
+        if path is None or bool(self.config.force_retrain):
+            return None
+        if not path.exists():
+            if bool(self.config.require_checkpoint):
+                raise BNNCheckpointError(
+                    f"BNN checkpoint is required but does not exist: {path}. "
+                    "Set force_retrain=True to train and write a new checkpoint."
+                )
+            return None
+        try:
+            surrogate = self._surrogate_class().load(path, device=str(self._device))
+        except Exception as exc:  # noqa: BLE001 - explicit checkpoints should fail loudly.
+            raise BNNCheckpointError(f"Failed to load BNN checkpoint {path}: {type(exc).__name__}: {exc}") from exc
+        self._validate_checkpoint_surrogate(surrogate, dataset, path)
+        self._surrogate = surrogate
+        metadata = dict(getattr(surrogate, "checkpoint_metadata", {}) or {})
+        train_count = metadata.get("train_count")
+        if train_count is None:
+            return int(dataset.n_samples)
+        train_count = int(train_count)
+        if train_count > int(dataset.n_samples):
+            raise BNNCheckpointError(
+                f"BNN checkpoint {path} was trained with {train_count} samples, "
+                f"but the current optimizer history has only {int(dataset.n_samples)}."
+            )
+        return train_count
+
+    def _surrogate_class(self) -> type[LegacyBNNResponseSurrogate]:
+        if self.config.surrogate_variant == "fourier":
+            return FourierBNNResponseSurrogate
+        return LegacyBNNResponseSurrogate
+
+    def _build_response_surrogate(
+        self,
+        dataset: BCLFResponseDataset,
+        *,
+        seed: int | None,
+    ) -> LegacyBNNResponseSurrogate:
+        kwargs: dict[str, Any] = {
+            "hidden_dims": list(self.config.hidden_dims),
+            "prior_sigma": float(self.config.prior_sigma),
+            "epochs": int(self._initial_epoch_count(dataset.n_samples)),
+            "batch_size": int(self.config.batch_size),
+            "lr": float(self.config.lr),
+            "bayesian_loss_weight": float(self.config.bayesian_loss_weight),
+            "mc_samples": int(self.config.mc_samples),
+            "target_mode": "db",
+            "seed": 0 if seed is None else int(seed),
+            "device": str(self._device),
+        }
+        if self.config.surrogate_variant == "fourier":
+            kwargs.update(
+                {
+                    "fourier_bands": list(self.config.fourier_bands),
+                    "include_raw_frequency": bool(self.config.include_raw_frequency),
+                    "frequency_min_hz": float(
+                        np.min(dataset.freqs)
+                        if self.config.frequency_min_hz is None
+                        else self.config.frequency_min_hz
+                    ),
+                    "frequency_max_hz": float(
+                        np.max(dataset.freqs)
+                        if self.config.frequency_max_hz is None
+                        else self.config.frequency_max_hz
+                    ),
+                }
+            )
+        return self._surrogate_class()(**kwargs)
+
+    def _expected_surrogate_input_dim(self, dataset: BCLFResponseDataset) -> int:
+        geometry_dim = int(dataset.X.shape[1])
+        if self.config.surrogate_variant == "fourier":
+            raw_dim = 1 if self.config.include_raw_frequency else 0
+            return geometry_dim + raw_dim + 2 * len(self.config.fourier_bands)
+        return geometry_dim + 1
+
+    def _validate_checkpoint_surrogate(
+        self,
+        surrogate: LegacyBNNResponseSurrogate,
+        dataset: BCLFResponseDataset,
+        path: Path,
+    ) -> None:
+        expected_variant = str(self.config.surrogate_variant)
+        actual_variant = str(getattr(surrogate, "surrogate_variant", "raw"))
+        if actual_variant != expected_variant:
+            raise BNNCheckpointError(
+                f"BNN checkpoint {path} surrogate_variant={actual_variant!r} does not match "
+                f"configured {expected_variant!r}."
+            )
+        expected_input_dim = self._expected_surrogate_input_dim(dataset)
+        if int(surrogate.input_dim) != expected_input_dim:
+            raise BNNCheckpointError(
+                f"BNN checkpoint {path} input_dim={surrogate.input_dim} does not match "
+                f"expected input_dim={expected_input_dim}."
+            )
+        if surrogate.target_mode != "db":
+            raise BNNCheckpointError(
+                f"BNN checkpoint {path} target_mode={surrogate.target_mode!r} does not match required 'db'."
+            )
+        metadata = dict(getattr(surrogate, "checkpoint_metadata", {}) or {})
+        variable_order = metadata.get("variable_order")
+        if variable_order is not None and list(variable_order) != list(dataset.variable_order):
+            raise BNNCheckpointError(f"BNN checkpoint {path} variable_order does not match current dataset.")
+        n_freqs = metadata.get("n_freqs")
+        if n_freqs is not None and int(n_freqs) != int(dataset.n_freqs):
+            raise BNNCheckpointError(f"BNN checkpoint {path} n_freqs={n_freqs} does not match {dataset.n_freqs}.")
+
+    def _save_checkpoint_if_configured(self, dataset: BCLFResponseDataset, *, seed: int | None) -> None:
+        path = self._checkpoint_path()
+        if path is None or not bool(self.config.save_checkpoint):
+            return
+        if self._surrogate is None:
+            raise RuntimeError("Cannot save BNN checkpoint before fitting a surrogate")
+        self._surrogate.save(
+            path,
+            metadata={
+                "backend": self.name,
+                "train_count": int(dataset.n_samples),
+                "variable_order": list(dataset.variable_order),
+                "n_freqs": int(dataset.n_freqs),
+                "freq_min_hz": float(np.min(dataset.freqs)),
+                "freq_max_hz": float(np.max(dataset.freqs)),
+                "seed": None if seed is None else int(seed),
+                "acquisition": str(self.config.acquisition),
+                "initial_train_size": self.config.initial_train_size,
+                "update_epochs": int(self.config.update_epochs),
+            },
+        )
 
     def _should_warm_start(self, dataset: BCLFResponseDataset) -> bool:
         return (
@@ -427,6 +618,27 @@ class BNNExpectedImprovementBackend:
             case_ids=[f"candidate_{i}" for i in range(X.shape[0])],
         )
 
+    def predict_response_profile(
+        self,
+        geometry: np.ndarray,
+        *,
+        mc_samples: int | None = None,
+    ) -> BNNResponsePrediction:
+        if self._surrogate is None or self._train_dataset is None:
+            raise RuntimeError("BNN acquisition backend is not fitted")
+        candidate_dataset = self._candidate_dataset(np.asarray(geometry, dtype=float).reshape(1, -1))
+        mean, samples = self._surrogate.predict_s_params(
+            candidate_dataset,
+            np.asarray([0], dtype=int),
+            mc_samples=int(mc_samples or self.config.mc_samples),
+            return_samples=True,
+        )
+        return BNNResponsePrediction(
+            freqs=np.asarray(self._train_dataset.freqs, dtype=float),
+            mean_s_params=np.asarray(mean[0], dtype=complex),
+            response_samples=np.asarray(samples[:, 0, :, :, :], dtype=complex),
+        )
+
     def _metric_samples_from_response_samples(self, response_samples: np.ndarray) -> np.ndarray:
         if self._optimization_spec is None or self._train_dataset is None:
             raise RuntimeError("BNN response acquisition backend is not fitted")
@@ -496,6 +708,7 @@ class BNNExpectedImprovementBackend:
                     "dtype": "torch.float32",
                     "x_is_normalized": False,
                     "surrogate": "response",
+                    "surrogate_variant": str(self._surrogate.surrogate_variant),
                     "mc_samples": int(self.config.mc_samples),
                     "epochs": int(self.config.epochs),
                     "update_epochs": int(self.config.update_epochs),
@@ -503,6 +716,10 @@ class BNNExpectedImprovementBackend:
                     "fit_mode": self._last_fit_mode,
                     "train_count": int(self._last_train_count),
                     "trained_epochs": int(self._surrogate.trained_epochs),
+                    "checkpoint_path": (
+                        None if self._checkpoint_path() is None else str(self._checkpoint_path())
+                    ),
+                    "force_retrain": bool(self.config.force_retrain),
                 },
             },
         )

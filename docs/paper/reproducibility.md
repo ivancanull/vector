@@ -31,6 +31,22 @@ Each paper-facing card in [experiments.md](experiments.md) must include:
 | BNN EI replay | `comparison_summary.csv`, `comparison_runs.csv`, and best-so-far plots |
 | Acquisition quality | `acquisition_quality_summary.csv`, row-level CSVs, and rank/objective plots |
 
+## Paper Figure Export Convention
+
+Paper-facing figures should be exported through `src/paper_figures.py` rather
+than ad hoc `savefig` calls. The exporter uses IEEE column widths and chooses a
+layout from deterministic content hints:
+
+- `single`: one panel, at most three curves, short labels, compact legend.
+- `double`: multi-panel figures, heatmaps, dense tick labels, four or more
+  methods/curves, large legends, or response plots with markers/band shading.
+
+Do not generate both single- and double-column PDFs unless a figure explicitly
+requests both layouts. Each exported paper figure must write a manifest row
+with figure id, chosen layout, reason, format, dimensions, and path. Diagnostic
+plots can stay under `experiments/.../plots/`; article-ready assets should be
+mirrored under `docs/paper/assets/<experiment_id>/`.
+
 ## Inclusion Gates
 
 - BO online: include seeds with `status == completed` and `num_trials >= 80`.

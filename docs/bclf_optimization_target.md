@@ -168,6 +168,42 @@ support claiming that BO or Turbo outperforms the LHS baseline. This should be
 treated as a limitation of the current optimizer setup, not as proof that
 surrogate-assisted optimization is generally useless for BCLF design.
 
+### Best-Candidate S-Parameter Shape Check
+
+The notebook
+[`notebooks/bclf_best_candidate_sp_range_compare.ipynb`](../notebooks/bclf_best_candidate_sp_range_compare.ipynb)
+selects each method's global best finite-objective candidate across the five
+completed seeds, loads its cached `.s2p` response, and plots full-band `S21` and
+`S11` plus band-metric range bars. It does not submit worker jobs or run HFSS.
+
+| Method | Best seed | Iteration | Case ID | Objective |
+|---|---:|---:|---|---:|
+| BO | 1 | 38 | `bo_online_general_seed1_it0038` | -23.814 |
+| LHS | 0 | 23 | `lhs_online_general_seed0_it0023` | -25.141 |
+| Turbo | 3 | 59 | `turbo_online_general_seed3_it0059` | -22.517 |
+
+Constraint-facing extrema from the best candidates are:
+
+| Method | Passband S21 min | Passband S11 max | Low-stop S21 max | High-stop S21 max |
+|---|---:|---:|---:|---:|
+| BO | -1.440 dB | -7.518 dB | -19.487 dB | -16.328 dB |
+| LHS | -1.020 dB | -9.372 dB | -18.932 dB | -15.646 dB |
+| Turbo | -1.759 dB | -6.419 dB | -23.194 dB | -18.704 dB |
+
+The BO and LHS best candidates satisfy the passband and stopband thresholds
+used by the current target (`S21 >= -5 dB` in passband, `S11 <= -7 dB` in
+passband, stopband `S21 <= -15 dB`). The Turbo best candidate has stronger
+stopband attenuation than BO/LHS in this summary, but its passband `S11` maximum
+is `-6.419 dB`, slightly above the `-7 dB` target line; its scalar objective is
+therefore worse than the LHS and BO best candidates.
+
+Generated local artifacts:
+
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_s11_s21_fullband.png`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_band_metric_range_bars.png`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_band_metrics.csv`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_sp_range_summary.json`
+
 ## Artifact Roots
 
 Each online campaign records per-seed JSON/CSV/checkpoint artifacts under its

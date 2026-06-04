@@ -103,11 +103,11 @@ class OptimizerBase(ABC):
         self.on_run_start()
         target_trials = self.n_init + self.budget
 
-        while len(self._history) < target_trials:
+        while self._budgeted_trial_count() < target_trials:
             if len(self.candidate_space.remaining()) == 0:
                 break
 
-            iteration = len(self._history)
+            iteration = self._budgeted_trial_count()
             self.state.step = max(0, iteration - self.n_init)
             self.on_iteration_start(iteration)
 
@@ -141,7 +141,16 @@ class OptimizerBase(ABC):
             raise RuntimeError("No trials were executed")
 
         self.on_run_end()
-        best_trial = min(self._history, key=lambda row: float(row["objective"]))
+        best_candidates = [
+            row
+            for row in self._history
+            if not bool(row.get("exclude_from_state", False))
+            and row.get("simulation_status") == "done"
+            and np.isfinite(float(row.get("objective", float("inf"))))
+        ]
+        if not best_candidates:
+            best_candidates = list(self._history)
+        best_trial = min(best_candidates, key=lambda row: float(row["objective"]))
         summary = {
             "num_trials": len(self._history),
             "best_objective": best_trial["objective"],
@@ -220,6 +229,8 @@ class OptimizerBase(ABC):
         for trial in trials:
             requested = np.asarray(trial["requested_geometry"], dtype=float)
             self.candidate_space.remove(requested)
+            if bool(trial.get("exclude_from_state", False)):
+                continue
             if trial["simulation_status"] != "done" or not np.isfinite(float(trial["objective"])):
                 continue
 
@@ -369,6 +380,9 @@ class OptimizerBase(ABC):
             "simulation_status": simulation_status,
             "simulation_error": simulation_error,
             "simulation_metadata": simulation.metadata,
+            "counts_toward_budget": True,
+            "exclude_from_model_training": False,
+            "exclude_from_state": False,
             "t_engine_sec": 0.0,
             "t_simulator_sec": record.t_simulator_sec,
             "optimizer_backend": self.optimizer_backend,
@@ -417,6 +431,9 @@ class OptimizerBase(ABC):
             return 0.0
         hits = sum(1 for row in self._history if bool(row.get("cache_hit", False)))
         return float(hits / len(self._history))
+
+    def _budgeted_trial_count(self) -> int:
+        return sum(1 for row in self._history if bool(row.get("counts_toward_budget", True)))
 
     def _save_checkpoint(self) -> None:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

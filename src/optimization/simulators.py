@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 import time
 from typing import Any, Literal
 
@@ -17,6 +18,25 @@ from simulation.core import SimulationInput
 from simulation.result_store import SimulationResultStore
 
 from .datasets import PassiveDataset
+
+try:
+    from src.afs.objective_weighted import (
+        ObjectiveWeightedAFSConfig,
+        VFFitConfig,
+        reconstruct_sparams_vf,
+        select_objective_weighted_afs_indices,
+        uncertainty_profile_from_samples,
+        write_touchstone_ri,
+    )
+except ImportError:  # pragma: no cover - tests often put src/ directly on PYTHONPATH
+    from afs.objective_weighted import (
+        ObjectiveWeightedAFSConfig,
+        VFFitConfig,
+        reconstruct_sparams_vf,
+        select_objective_weighted_afs_indices,
+        uncertainty_profile_from_samples,
+        write_touchstone_ri,
+    )
 
 
 SimulationStatus = Literal["done", "failed"]
@@ -407,7 +427,13 @@ class ServerQueueSimulator(Simulator):
             return False
         return int(iteration) < int(self.cache_required_iterations)
 
-    def _build_job(self, case_id: str, variables: dict[str, float]) -> SimulationJob:
+    def _build_job(
+        self,
+        case_id: str,
+        variables: dict[str, float],
+        *,
+        frequency_points_ghz: list[float] | None = None,
+    ) -> SimulationJob:
         formatted: dict[str, str] = {}
         for name in self.variable_order:
             unit = self.unit_map.get(name)
@@ -423,6 +449,7 @@ class ServerQueueSimulator(Simulator):
             design_name=self.design_name,
             setup_name=self.setup_name,
             sweep_name=self.sweep_name,
+            frequency_points_ghz=frequency_points_ghz,
         )
 
     def _enqueue_or_resume(self, job: SimulationJob) -> None:
@@ -548,6 +575,413 @@ class ServerQueueSimulator(Simulator):
             target = archive_dir / f"{pending_path.stem}.{ts}{pending_path.suffix}"
         pending_path.replace(target)
         return target
+
+
+class OWAFSServerQueueSimulator(ServerQueueSimulator):
+    """Queue simulator that runs post-initial designs through OWAFS + VF."""
+
+    def __init__(
+        self,
+        *,
+        afs_root: str | Path,
+        owafs_config: ObjectiveWeightedAFSConfig | None = None,
+        vf_config: VFFitConfig | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.afs_root = Path(afs_root)
+        self.owafs_config = owafs_config or ObjectiveWeightedAFSConfig()
+        self.vf_config = vf_config or VFFitConfig()
+
+    def simulate_afs(self, geometry: np.ndarray, prediction: Any) -> SimulationResult:
+        self.num_calls += 1
+        start = time.perf_counter()
+        values = np.asarray(geometry, dtype=float).reshape(-1)
+        self._log(f"afs simulate call={self.num_calls} run_id={self.run_id} geometry={values.tolist()}")
+        prepared = self._prepare_request(values, case_id=self._build_case_id())
+        if isinstance(prepared, SimulationResult):
+            return prepared
+        case_id, request, actual_geometry = prepared
+
+        try:
+            uncertainty = uncertainty_profile_from_samples(prediction.response_samples)
+            selected = select_objective_weighted_afs_indices(
+                prediction.freqs,
+                prediction.mean_s_params,
+                uncertainty,
+                n_points=int(self.owafs_config.sample_count),
+                config=self.owafs_config,
+                vf_config=self.vf_config,
+            )
+        except Exception as exc:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Failed to select OWAFS frequency points: {type(exc).__name__}: {exc}",
+                metadata={
+                    "cache_hit": False,
+                    "response_source": "afs_vf_reconstructed",
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        raw_touchstone = self._afs_case_dir(case_id) / f"{case_id}_raw.s{self.port_num}p"
+        reconstructed_touchstone = self._afs_case_dir(case_id) / f"{case_id}_vf_reconstructed.s{self.port_num}p"
+        metadata_path = self._afs_case_dir(case_id) / f"{case_id}.metadata.json"
+        if reconstructed_touchstone.exists():
+            try:
+                freqs, s_params = self._load_touchstone(reconstructed_touchstone)
+                metadata = read_json(metadata_path) if metadata_path.exists() else {}
+            except Exception as exc:
+                self.num_failures += 1
+                return SimulationResult(
+                    freqs=None,
+                    s_params=None,
+                    status="failed",
+                    error=f"Failed to parse cached OWAFS reconstruction: {type(exc).__name__}: {exc}",
+                    metadata={
+                        "cache_hit": True,
+                        "response_source": "afs_vf_reconstructed",
+                        "job_id": case_id,
+                        "case_id": case_id,
+                        "touchstone_path": str(reconstructed_touchstone),
+                        "simulator_elapsed_sec": float(time.perf_counter() - start),
+                    },
+                    actual_geometry=actual_geometry,
+                )
+            self.num_success += 1
+            metadata = dict(metadata)
+            metadata.update(
+                {
+                    "cache_hit": True,
+                    "response_source": "afs_vf_reconstructed",
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "touchstone_path": str(reconstructed_touchstone),
+                    "vf_reconstructed_touchstone_path": str(reconstructed_touchstone),
+                    "afs_metadata_path": str(metadata_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                }
+            )
+            return SimulationResult(
+                freqs=freqs,
+                s_params=s_params,
+                status="done",
+                metadata=metadata,
+                actual_geometry=actual_geometry,
+            )
+
+        job = self._build_job(
+            case_id,
+            request.variables,
+            frequency_points_ghz=[float(x) for x in selected.frequency_points_ghz],
+        )
+        self._enqueue_or_resume(job)
+        wait_res = self._wait_job_result(case_id)
+        if wait_res["status"] != "done":
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=str(wait_res.get("error", "simulation_failed")),
+                metadata={
+                    "cache_hit": False,
+                    "response_source": "afs_vf_reconstructed",
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(wait_res.get("result_json_path")) if wait_res.get("result_json_path") else None,
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": None,
+                    "frequency_points_ghz": selected.frequency_points_ghz,
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        result_json_path = wait_res["result_json_path"]
+        payload = read_json(result_json_path)
+        artifact_touchstone = payload.get("artifacts", {}).get("touchstone")
+        if not isinstance(artifact_touchstone, str) or not artifact_touchstone:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error="Result JSON has no touchstone artifact",
+                metadata={
+                    "cache_hit": False,
+                    "response_source": "afs_vf_reconstructed",
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "frequency_points_ghz": selected.frequency_points_ghz,
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        source_touchstone = wait_res["queue_root"] / artifact_touchstone
+        try:
+            raw_touchstone.parent.mkdir(parents=True, exist_ok=True)
+            if source_touchstone.resolve() != raw_touchstone.resolve():
+                shutil.copy2(source_touchstone, raw_touchstone)
+            sample_freqs, sample_s_params = self._load_touchstone(raw_touchstone)
+            recon_s_params = reconstruct_sparams_vf(
+                sample_freqs,
+                sample_s_params,
+                np.asarray(prediction.freqs, dtype=float),
+                config=self.vf_config,
+            )
+            write_touchstone_ri(
+                reconstructed_touchstone,
+                np.asarray(prediction.freqs, dtype=float),
+                recon_s_params,
+                comment=f"OWAFS-BNN VF reconstruction for {case_id}",
+            )
+        except Exception as exc:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Failed to parse/reconstruct OWAFS touchstone: {type(exc).__name__}: {exc}",
+                metadata={
+                    "cache_hit": False,
+                    "response_source": "afs_vf_reconstructed",
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": str(source_touchstone),
+                    "afs_raw_touchstone_path": str(raw_touchstone),
+                    "frequency_points_ghz": selected.frequency_points_ghz,
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        metadata = {
+            "cache_hit": False,
+            "response_source": "afs_vf_reconstructed",
+            "job_id": case_id,
+            "case_id": case_id,
+            "result_json_path": str(result_json_path),
+            "wait_seconds": float(wait_res["wait_seconds"]),
+            "touchstone_path": str(reconstructed_touchstone),
+            "afs_raw_touchstone_path": str(raw_touchstone),
+            "vf_reconstructed_touchstone_path": str(reconstructed_touchstone),
+            "afs_metadata_path": str(metadata_path),
+            "afs_sample_count": int(len(selected.indices)),
+            "frequency_points_ghz": selected.frequency_points_ghz,
+            "frequency_indices": [int(i) for i in selected.indices],
+            "owafs": selected.metadata,
+            "vf": self.vf_config.order_for_sample_count(len(selected.indices))
+            | {
+                "max_iter": int(self.vf_config.max_iter),
+                "tol": float(self.vf_config.tol),
+            },
+            "actual_geometry": actual_geometry.tolist(),
+            "variables": dict(request.variables),
+            "simulator_elapsed_sec": float(time.perf_counter() - start),
+        }
+        metadata_path.write_text(
+            json_dumps(metadata),
+            encoding="utf-8",
+        )
+
+        self.num_success += 1
+        return SimulationResult(
+            freqs=np.asarray(prediction.freqs, dtype=float),
+            s_params=recon_s_params,
+            status="done",
+            metadata=metadata,
+            actual_geometry=actual_geometry,
+        )
+
+    def simulate_full_validation(self, geometry: np.ndarray, *, case_id: str) -> SimulationResult:
+        return self._simulate_full_with_case_id(
+            geometry,
+            case_id=str(case_id),
+            metadata_extra={"response_source": "full_validation", "full_validation": True},
+        )
+
+    def _simulate_full_with_case_id(
+        self,
+        geometry: np.ndarray,
+        *,
+        case_id: str,
+        metadata_extra: dict[str, Any] | None = None,
+    ) -> SimulationResult:
+        self.num_calls += 1
+        start = time.perf_counter()
+        values = np.asarray(geometry, dtype=float).reshape(-1)
+        prepared = self._prepare_request(values, case_id=case_id)
+        if isinstance(prepared, SimulationResult):
+            return prepared
+        case_id, request, actual_geometry = prepared
+        extra = dict(metadata_extra or {})
+
+        cached = self.result_store.lookup(request)
+        if cached is not None:
+            try:
+                freqs, s_params = self._load_touchstone(cached.touchstone_path)
+            except Exception as exc:
+                self.num_failures += 1
+                return SimulationResult(
+                    freqs=None,
+                    s_params=None,
+                    status="failed",
+                    error=f"Failed to parse cached touchstone: {exc}",
+                    metadata={"cache_hit": True, "case_id": case_id, **extra},
+                    actual_geometry=actual_geometry,
+                )
+            self.num_success += 1
+            return SimulationResult(
+                freqs=freqs,
+                s_params=s_params,
+                status="done",
+                metadata={
+                    "cache_hit": True,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": None,
+                    "wait_seconds": 0.0,
+                    "touchstone_path": str(cached.touchstone_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                    **extra,
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        job = self._build_job(case_id, request.variables)
+        self._enqueue_or_resume(job)
+        wait_res = self._wait_job_result(case_id)
+        if wait_res["status"] != "done":
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=str(wait_res.get("error", "simulation_failed")),
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(wait_res.get("result_json_path")) if wait_res.get("result_json_path") else None,
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": None,
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                    **extra,
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        result_json_path = wait_res["result_json_path"]
+        payload = read_json(result_json_path)
+        artifact_touchstone = payload.get("artifacts", {}).get("touchstone")
+        if not isinstance(artifact_touchstone, str) or not artifact_touchstone:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error="Result JSON has no touchstone artifact",
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    **extra,
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        touchstone_path = wait_res["queue_root"] / artifact_touchstone
+        try:
+            saved = self.result_store.save(
+                request=request,
+                source_touchstone=touchstone_path,
+                metadata={"source": "queue", **extra},
+            )
+            freqs, s_params = self._load_touchstone(saved.touchstone_path)
+        except Exception as exc:
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Failed to parse/save touchstone: {exc}",
+                metadata={
+                    "cache_hit": False,
+                    "job_id": case_id,
+                    "case_id": case_id,
+                    "result_json_path": str(result_json_path),
+                    "wait_seconds": float(wait_res["wait_seconds"]),
+                    "touchstone_path": str(touchstone_path),
+                    "simulator_elapsed_sec": float(time.perf_counter() - start),
+                    **extra,
+                },
+                actual_geometry=actual_geometry,
+            )
+
+        self.num_success += 1
+        return SimulationResult(
+            freqs=freqs,
+            s_params=s_params,
+            status="done",
+            metadata={
+                "cache_hit": False,
+                "job_id": case_id,
+                "case_id": case_id,
+                "result_json_path": str(result_json_path),
+                "wait_seconds": float(wait_res["wait_seconds"]),
+                "touchstone_path": str(saved.touchstone_path),
+                "simulator_elapsed_sec": float(time.perf_counter() - start),
+                **extra,
+            },
+            actual_geometry=actual_geometry,
+        )
+
+    def _prepare_request(
+        self,
+        values: np.ndarray,
+        *,
+        case_id: str,
+    ) -> tuple[str, SimulationInput, np.ndarray] | SimulationResult:
+        if len(values) != len(self.variable_order):
+            self.num_failures += 1
+            return SimulationResult(
+                freqs=None,
+                s_params=None,
+                status="failed",
+                error=f"Geometry dimension mismatch: got {len(values)}, expected {len(self.variable_order)}",
+            )
+        quantized_variables = self._quantize_variables(
+            {name: float(values[i]) for i, name in enumerate(self.variable_order)}
+        )
+        actual_geometry = np.array([quantized_variables[name] for name in self.variable_order], dtype=float)
+        request = SimulationInput(
+            case_id=case_id,
+            variable_order=list(self.variable_order),
+            variables=quantized_variables,
+        )
+        return case_id, request, actual_geometry
+
+    def _afs_case_dir(self, case_id: str) -> Path:
+        return self.afs_root / str(self.run_id) / str(case_id)
+
+
+def json_dumps(payload: dict[str, Any]) -> str:
+    import json
+
+    return json.dumps(payload, indent=2, ensure_ascii=True)
 
 
 @dataclass(frozen=True)

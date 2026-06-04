@@ -138,6 +138,45 @@ Until the full online campaign finishes, paper claims should describe BNN
 feasibility, replay behavior, and acquisition-quality diagnostics only. They
 should not make a final online ranking claim.
 
+## Frequency-Sampling Diagnostic
+
+The offline AFS reconstruction diagnostic includes Objective-Weighted AFS as a
+retrospective method. It is stored in experiment artifacts as
+`oracle_vf_error`, but paper-facing text should use the descriptive method name
+Objective-Weighted AFS. The uncertainty-only baseline is Uncertainty-Aware AFS,
+stored internally as `uaw`.
+
+Objective-Weighted AFS repeatedly fits VF on the currently sampled frequency
+points, compares the VF reconstruction against the full cached response, and
+adds the unsampled frequency with the largest objective-weighted residual:
+
+```text
+score(f) = band_weight(f) *
+           (0.5 * |S11_true_dB(f) - S11_vf_dB(f)|
+            + |S21_true_dB(f) - S21_vf_dB(f)|)
+```
+
+The band weights emphasize BCLF passband, stopband, and boundary regions. Since
+the method uses the full response during selection, it is not a deployable
+online sampler; it is a diagnostic for the headroom available to practical
+objective-weighted AFS designs.
+
+The deployable combined variant is Objective-Weighted + Uncertainty-Aware AFS,
+stored internally as `owafs_bnn`. It uses the same endpoint, BCLF boundary, and
+uniform-fill anchors, but selects later frequency points without inspecting the
+full-wave truth. Its score combines a BNN-proxy VF residual with BNN Monte
+Carlo uncertainty:
+
+```text
+score(f) = band_weight(f) * 0.5 *
+           (rank01(vf_residual_db(f)) + rank01(mc_uncertainty_db(f)))
+```
+
+Here `vf_residual_db` compares the BNN mean response with a VF reconstruction
+fit to the currently selected points, while `mc_uncertainty_db` is estimated
+from BNN response samples. Full-wave responses are used only after selection to
+evaluate the offline reconstruction and objective error.
+
 ## Paper Claim Boundaries
 
 - Supported now: method descriptions, objective protocol, BO online baseline,

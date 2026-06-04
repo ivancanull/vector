@@ -17,6 +17,9 @@ Principles:
 - Experiment design and protocol: [experiments.md](experiments.md)
 - Claim-to-evidence map (figures/tables): [results_index.md](results_index.md)
 - Reproducibility policy: [reproducibility.md](reproducibility.md)
+- TCAD journal progress: [tcad_journal_progress.md](tcad_journal_progress.md)
+- TCAD journal TODO: [tcad_journal_todo.md](tcad_journal_todo.md)
+- TCAD journal idea log: [tcad_journal_idea_log.md](tcad_journal_idea_log.md)
 - Canonical experiment-card template: [templates/experiment_card.md](templates/experiment_card.md)
 
 ## Minimum Maintenance Rules

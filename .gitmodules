@@ -4,3 +4,6 @@
 [submodule "skills/skill-builder"]
 	path = skills/skill-builder
 	url = git@github.com:ivancanull/skill-builder.git
+[submodule "submissions/bnn-vector-fitting-journal"]
+	path = submissions/bnn-vector-fitting-journal
+	url = ../bnn-vector-fitting-journal

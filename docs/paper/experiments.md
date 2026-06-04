@@ -167,6 +167,23 @@ outperforms LHS. It should be reported as a limitation of the current optimizer
 configuration and a motivation for controlled replay or broader-seed follow-up,
 not as evidence that optimization is generally ineffective.
 
+### Best-Candidate Response Check
+
+The response-shape check notebook
+`notebooks/bclf_best_candidate_sp_range_compare.ipynb` compares the global best
+candidate from each method using cached Touchstone responses. LHS has the best
+scalar objective among these three best candidates.
+
+| Method | Best seed | Iteration | Objective | Passband S21 min | Passband S11 max | Low-stop S21 max | High-stop S21 max |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| BO | 1 | 38 | -23.814 | -1.440 | -7.518 | -19.487 | -16.328 |
+| LHS | 0 | 23 | -25.141 | -1.020 | -9.372 | -18.932 | -15.646 |
+| Turbo | 3 | 59 | -22.517 | -1.759 | -6.419 | -23.194 | -18.704 |
+
+BO and LHS satisfy the current passband/stopband thresholds. Turbo gives strong
+stopband attenuation, but its passband `S11` maximum is slightly above the
+`-7 dB` target line.
+
 ### Evidence Artifacts
 
 - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_summary.csv`
@@ -174,6 +191,9 @@ not as evidence that optimization is generally ineffective.
 - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_by_iteration.csv`
 - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_best_so_far_median.png`
 - `experiments/bo_lhs_turbo_online_comparison/bo_lhs_turbo_final_best_by_seed.png`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_s11_s21_fullband.png`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_band_metric_range_bars.png`
+- `experiments/bo_lhs_turbo_online_comparison/best_candidate_sp_range/bclf_best_candidate_band_metrics.csv`
 
 ## Experiment Card: BNN Offline Response-Surrogate Feasibility
 
@@ -393,3 +413,145 @@ complete, so no BNN online performance claim should be made yet.
 - `notebooks/bnn_online_experiment.ipynb`
 - `docs/bclf_bnn_optimization_plan.md`
 - `tests/optimization/test_bnn_botorch_optimizer.py`
+
+## Experiment Card: AFS VF Reconstruction Sampling Diagnostic
+
+- experiment_id: `uaw_afs_ext_offline_reproduction_v1`
+- status: `draft`
+- primary notebook: `notebooks/uaw_afs_ext_offline_reproduction.ipynb`
+- output root: `experiments/uaw_afs_ext_offline_reproduction/`
+
+### Paper-Facing Claim
+
+For BCLF response reconstruction, Uncertainty-Aware AFS, stored internally as
+`uaw`, is not well aligned with vector-fitting error. Objective-Weighted AFS,
+stored internally as `oracle_vf_error`, remains a retrospective diagnostic
+because it uses full-wave truth during frequency selection. The newer
+Objective-Weighted + Uncertainty-Aware AFS selector, stored internally as
+`owafs_bnn`, is deployable in the offline replay sense: it does not use
+full-wave truth to choose frequencies, and instead combines BNN proxy VF
+residuals with BNN Monte Carlo uncertainty. In the latest replay,
+Objective-Weighted + Uncertainty-Aware AFS is strongest for preserving the
+scalar BCLF objective, but not for full-curve dB reconstruction error.
+
+### Protocol
+
+- Data: offline replay over the cached BCLF `ext` Touchstone dataset.
+- Recorded latest sweeps: seeds `[0, 1, 2, 3, 4]`; each
+  sample-count/method summary aggregates `250` replay cases.
+- Frequency grid: `401` full-wave points from `3.5` to `8.7 GHz`.
+- Sampling-count sweep: every integer `n = 4..20`.
+- VF order policies:
+  - fixed-order baseline: `4` real poles plus `8` complex pole pairs, i.e.
+    `20` actual poles and matching residues for every `n`.
+  - order-matched rerun: `actual_poles = floor(n / 2)`, with mostly
+    complex-conjugate pairs plus one real pole when needed, so
+    `poles + residues <= n`.
+- Methods:
+  - `uniform`: deterministic endpoint-inclusive uniform frequency selection.
+  - `random`: endpoint-inclusive random interior frequency selection.
+  - Uncertainty-Aware AFS, stored internally as `uaw`:
+    endpoint-inclusive uncertainty-weighted random selection using BNN MC
+    variance in `S11` and `S21` dB.
+  - Objective-Weighted AFS, stored internally as `oracle_vf_error`:
+    retrospective adaptive selector using the full-wave truth to add points
+    where current VF reconstruction error is largest after objective weighting.
+  - Objective-Weighted + Uncertainty-Aware AFS, stored internally as
+    `owafs_bnn`: deployable adaptive selector using BNN mean-response VF
+    residuals and BNN MC uncertainty, without consulting the full-wave
+    response during frequency selection.
+
+Objective-Weighted AFS starts from endpoints, BCLF band-boundary anchors, and
+uniform-fill anchors, then repeatedly fits VF on the sampled points and adds
+the unsampled frequency with the largest objective-weighted residual:
+`0.5 * |S11_true_dB - S11_vf_dB| + |S21_true_dB - S21_vf_dB|`. Boundary,
+passband, and stopband weights emphasize objective-relevant regions. Because
+the full-wave truth is used during selection, this method is only an upper
+bound for method design.
+
+Objective-Weighted + Uncertainty-Aware AFS uses the same anchor policy but
+replaces full-truth residuals with a BNN proxy score:
+`band_weight * 0.5 * (rank01(vf_residual_db) + rank01(mc_uncertainty_db))`.
+The VF residual term compares the BNN mean response with its own VF
+reconstruction, and the uncertainty term comes from BNN MC samples. The true
+full response is used only after selection to evaluate the reconstructed
+response and scalar objective in this offline diagnostic.
+
+### Result
+
+The current fixed-order, order-matched, and deployable
+Objective-Weighted + Uncertainty-Aware AFS sweeps all pass their acceptance
+checks. The fixed-order and order-matched sweeps each contain `17000/17000`
+expected rows and `68/68` summarized sample-count/method pairs. The deployable
+combined AFS sweep contains `21250/21250` expected rows and `85/85` summarized
+pairs. Successful reconstructions have `401` output points, all reported
+metrics are finite, and the deployable checks confirm that `owafs_bnn` rows
+use BNN proxy residuals plus uncertainty rather than full-wave truth for
+selection.
+
+| Sweep | Metric | Best method | Best mean rank | Best wins | Uncertainty-Aware AFS mean rank | Objective-Weighted AFS mean rank | Objective-Weighted + Uncertainty-Aware AFS mean rank |
+|---|---|---|---:|---:|---:|---:|---:|
+| fixed 20-pole, 4 methods | median mean dB MAE | uniform | 1.71 | 12/17 | 2.94 | 2.88 | n/a |
+| fixed 20-pole, 4 methods | median objective abs. error | Objective-Weighted AFS | 1.29 | 13/17 | 2.71 | 1.29 | n/a |
+| order matched, 4 methods | median mean dB MAE | uniform | 1.82 | 10/17 | 3.00 | 3.06 | n/a |
+| order matched, 4 methods | median objective abs. error | Objective-Weighted AFS | 1.59 | 11/17 | 1.94 | 1.59 | n/a |
+| deployable combined AFS, 5 methods | median mean dB MAE | uniform | 1.94 | 10/17 | 2.94 | 3.18 | 4.24 |
+| deployable combined AFS, 5 methods | median objective abs. error | Objective-Weighted + Uncertainty-Aware AFS | 1.47 | 11/17 | 2.88 | 1.94 | 1.47 |
+
+Order matching tests whether the previous conclusion was caused by using too
+many VF poles at small `n`. It does not make Uncertainty-Aware AFS dominant:
+uniform remains best for full-curve dB MAE, and Objective-Weighted AFS remains
+best for objective error in the four-method order-matched diagnostic. The new
+deployable Objective-Weighted + Uncertainty-Aware AFS result is narrower but
+more useful for online design: it has the best objective-error rank in the
+five-method replay, including ahead of the truth-informed diagnostic under
+this metric, while performing poorly on full-curve dB MAE. The supported
+conclusion is therefore objective-specific: practical AFS should target
+objective-relevant VF residuals and model uncertainty, but this evidence does
+not claim best full-response reconstruction or completed online optimizer
+superiority.
+
+### Paper Figure
+
+- figure_id: `uaw_afs_sampling_sweep_order_matched`
+- layout policy: auto-selected IEEE double-column PDF, reason
+  `multi_panel_dense_methods`
+- PDF: `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.pdf`
+- preview: `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.png`
+- manifest: `docs/paper/assets/uaw_afs_ext_offline_reproduction/paper_figure_manifest.csv`
+
+Caption draft: Order-matched AFS reconstruction sweep on the BCLF offline
+`ext` dataset. Each curve reports the median over `250` replay cases for
+sampling budgets `n=4..20`; bands show the interquartile range.
+Uniform and random sampling remain competitive for full-curve reconstruction
+error, while the non-deployable Objective-Weighted AFS diagnostic best
+preserves the BCLF objective among the four methods shown.
+Uncertainty-Aware AFS does not dominate either baseline, indicating that
+practical AFS should target VF residuals and objective-relevant frequency bands
+rather than uncertainty alone.
+
+### Evidence Artifacts
+
+- `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_best_methods.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_regime_summary.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary_order_matched.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_best_methods_order_matched.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary_order_matched.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_regime_summary_order_matched.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/vf_order_policy_rank_comparison.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/vf_order_policy_takeaways.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks_order_matched.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_rows_deployable_owafs.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary_deployable_owafs.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary_deployable_owafs.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/reconstruction_rows_deployable_owafs.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks_deployable_owafs.csv`
+- `experiments/uaw_afs_ext_offline_reproduction/plots/deployable_owafs_sample_count_vs_mean_db_mae.png`
+- `experiments/uaw_afs_ext_offline_reproduction/plots/deployable_owafs_sample_count_vs_objective_abs_error.png`
+- `experiments/uaw_afs_ext_offline_reproduction/paper_figures/paper_figure_manifest.csv`
+- `docs/paper/assets/uaw_afs_ext_offline_reproduction/paper_figure_manifest.csv`
+- `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.pdf`
+- `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.png`

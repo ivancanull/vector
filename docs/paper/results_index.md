@@ -157,7 +157,67 @@ Rules:
   - include only methods/seeds whose campaign summaries have `status == completed` and `num_trials >= 80` for seeds `0..4`.
 - current numeric summary:
   - median final best: BO `-14.657`, LHS `-19.162`, Turbo `-19.161`; LHS wins 3 of 5 seeds.
+- best-candidate response check:
+  - global best candidates: BO seed `1` iter `38` objective `-23.814`, LHS seed `0` iter `23` objective `-25.141`, Turbo seed `3` iter `59` objective `-22.517`.
+  - LHS has the best scalar objective; BO and LHS satisfy the current response thresholds. Turbo has strong stopband attenuation but passband `S11` max `-6.419 dB`, slightly above the `-7 dB` target.
 - status: `paper-candidate`
+
+### C011: Objective-Weighted + Uncertainty-Aware AFS improves objective preservation
+
+- experiment card:
+  - [experiments.md#experiment-card-afs-vf-reconstruction-sampling-diagnostic](experiments.md#experiment-card-afs-vf-reconstruction-sampling-diagnostic)
+- evidence artifacts:
+  - `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_best_methods.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_regime_summary.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary_order_matched.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_best_methods_order_matched.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary_order_matched.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_regime_summary_order_matched.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/vf_order_policy_rank_comparison.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/vf_order_policy_takeaways.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks_order_matched.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_rows_deployable_owafs.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_sweep_summary_deployable_owafs.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/sample_count_rank_summary_deployable_owafs.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/reconstruction_rows_deployable_owafs.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/acceptance_checks_deployable_owafs.csv`
+  - `experiments/uaw_afs_ext_offline_reproduction/paper_figures/paper_figure_manifest.csv`
+  - `docs/paper/assets/uaw_afs_ext_offline_reproduction/paper_figure_manifest.csv`
+  - `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.pdf`
+  - `docs/paper/assets/uaw_afs_ext_offline_reproduction/uaw_afs_sampling_sweep_order_matched_ieee_double.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/sample_count_vs_mean_db_mae.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/sample_count_vs_objective_abs_error.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/sample_count_rank_heatmap.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/order_matched_sample_count_vs_mean_db_mae.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/order_matched_sample_count_vs_objective_abs_error.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/order_matched_sample_count_rank_heatmap.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/order_matched_delta_vs_uniform.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/deployable_owafs_sample_count_vs_mean_db_mae.png`
+  - `experiments/uaw_afs_ext_offline_reproduction/plots/deployable_owafs_sample_count_vs_objective_abs_error.png`
+- inclusion rule:
+  - offline replay diagnostic only; use cached BCLF `ext` responses, seeds `[0, 1, 2, 3, 4]`, and sampling counts `4..20`.
+  - fixed-order and order-matched sweeps each contain `17000/17000` expected rows and `68/68` summarized sample-count/method pairs.
+  - order-matched rerun uses `actual_poles = floor(n / 2)` and records
+    `vf_pole_residue_terms <= sample_count` for every row.
+  - deployable Objective-Weighted + Uncertainty-Aware AFS sweep contains
+    `21250/21250` expected rows and `85/85` summarized sample-count/method
+    pairs; its acceptance checks record that `owafs_bnn` selects frequencies
+    using BNN proxy residuals plus uncertainty, without full-wave truth.
+  - paper figure `uaw_afs_sampling_sweep_order_matched` uses the auto IEEE
+    layout rule and is exported as double-column only.
+  - do not interpret this as a completed online HFSS optimizer comparison.
+- current numeric summary:
+  - fixed-order baseline: for median mean dB MAE, uniform has the best mean rank `1.71` and wins `12/17`; Uncertainty-Aware AFS has mean rank `2.94`.
+  - fixed-order baseline: for median objective absolute error, Objective-Weighted AFS has mean rank `1.29` and wins `13/17`; Uncertainty-Aware AFS has mean rank `2.71`.
+  - order-matched rerun: for median mean dB MAE, uniform remains best by mean rank `1.82` and wins `10/17`; Uncertainty-Aware AFS has mean rank `3.00`.
+  - order-matched rerun: for median objective absolute error, Objective-Weighted AFS has mean rank `1.59` and wins `11/17`; Uncertainty-Aware AFS has mean rank `1.94`.
+  - deployable Objective-Weighted + Uncertainty-Aware AFS rerun: for median objective absolute error, the combined method has the best mean rank `1.47` and wins `11/17`; the truth-informed Objective-Weighted AFS diagnostic has mean rank `1.94`; Uncertainty-Aware AFS has mean rank `2.88`.
+  - deployable Objective-Weighted + Uncertainty-Aware AFS rerun: for median mean dB MAE, uniform remains best by mean rank `1.94` and wins `10/17`; the combined method has mean rank `4.24`, so it should be described as objective-preserving rather than full-curve-reconstruction optimal.
+  - interpretation: Uncertainty-Aware AFS does not dominate simple baselines. Objective-weighted residual signals are useful for preserving the BCLF objective, and the combined objective-weighted plus uncertainty-aware variant makes that signal deployable for offline replay, but full-curve dB MAE and objective-error optimization remain different targets.
+- status: `draft`
 
 ## Promotion Checklist
 

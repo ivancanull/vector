@@ -124,6 +124,7 @@ class LegacyBNNResponseSurrogate:
         self._optimizer = None
         self.trained_epochs = 0
         self.surrogate_variant = "raw"
+        self.checkpoint_metadata: dict[str, Any] = {}
 
     @property
     def is_fitted(self) -> bool:
@@ -231,6 +232,7 @@ class LegacyBNNResponseSurrogate:
             "trained_epochs": int(self.trained_epochs),
             "metadata": dict(metadata or {}),
         }
+        self.checkpoint_metadata = dict(metadata or {})
         torch.save(payload, path)
 
     @classmethod
@@ -266,6 +268,7 @@ class LegacyBNNResponseSurrogate:
             obj._target_regularizers_from_state(payload["target_regularizers"]),
         )
         obj.trained_epochs = int(payload.get("trained_epochs", obj.epochs))
+        obj.checkpoint_metadata = dict(payload.get("metadata", {}) or {})
         return obj
 
     @property

@@ -94,9 +94,12 @@ class BNNOnlineExperimentConfig:
     update_epochs: int = 20
     device: str = "cuda"
     mc_samples: int = 64
+    force_retrain_bnn: bool = False
+    require_bnn_checkpoint: bool = True
     config_path: Path = REPO_ROOT / "configs" / "filter_bnn_online_uaw_uaw.yaml"
     replay_dataset_path: Path = REPO_ROOT / "data" / "filter_bnn_online_uaw_uaw_dataset.pkl"
     output_dir: Path = REPO_ROOT / "experiments" / "bnn_online_general"
+    bnn_checkpoint_dir: Path | None = None
     cache_dir: Path = REPO_ROOT / "data" / "bandpass_coupled_line_filter_export" / "ext"
     queue_root: Path = REPO_ROOT / "queue"
     server_job_timeout_sec: float = 0.0
@@ -131,6 +134,10 @@ class BNNOnlineExperimentConfig:
             "mc_samples": int(self.mc_samples),
             "acquisition": "qlogei",
         }
+
+    @property
+    def resolved_bnn_checkpoint_dir(self) -> Path:
+        return self.output_dir / "bnn_checkpoints" if self.bnn_checkpoint_dir is None else self.bnn_checkpoint_dir
 
     @property
     def unit_map(self) -> dict[str, str]:
@@ -199,9 +206,10 @@ class BNNOnlineExperimentRunner:
 
             status_label = "resuming" if checkpoint_path.exists() and len(checkpoint_df) else "starting"
             optimizer_seed = self.effective_seed_for_rerun(seed)
+            self._ensure_bnn_checkpoint_or_retrain(seed)
             self._log(
                 f"[Campaign] seed={seed} optimizer_seed={optimizer_seed} {status_label}; "
-                f"checkpoint={checkpoint_path}"
+                f"checkpoint={checkpoint_path} bnn_checkpoint={self.bnn_checkpoint_for_seed(seed)}"
             )
             optimizer = self.build_optimizer(seed)
             self._log(f"checkpoint_path: {optimizer.checkpoint_path} exists={optimizer.checkpoint_path.exists()}")
@@ -242,6 +250,34 @@ class BNNOnlineExperimentRunner:
 
     def checkpoint_for_seed(self, seed: int) -> Path:
         return self.config.output_dir / f"{self.run_id_for_seed(seed)}.checkpoint.json"
+
+    def bnn_checkpoint_for_seed(self, seed: int) -> Path:
+        return self.config.resolved_bnn_checkpoint_dir / f"{self.run_id_for_seed(seed)}.bnn.pt"
+
+    def bnn_backend_config_for_seed(self, seed: int) -> dict[str, Any]:
+        payload = dict(self.config.bnn_backend_config)
+        payload.update(
+            {
+                "checkpoint_path": str(self.bnn_checkpoint_for_seed(seed)),
+                "force_retrain": bool(self.config.force_retrain_bnn),
+                "require_checkpoint": bool(
+                    self.config.require_bnn_checkpoint and not self.config.force_retrain_bnn
+                ),
+                "save_checkpoint": True,
+            }
+        )
+        return payload
+
+    def _ensure_bnn_checkpoint_or_retrain(self, seed: int) -> None:
+        if self.config.force_retrain_bnn or not self.config.require_bnn_checkpoint:
+            return
+        checkpoint_path = self.bnn_checkpoint_for_seed(seed)
+        if checkpoint_path.exists():
+            return
+        raise FileNotFoundError(
+            f"BNN checkpoint does not exist for seed={seed}: {checkpoint_path}. "
+            "Pass --force-retrain-bnn to train and write it from the optimizer history."
+        )
 
     def effective_seed_for_rerun(self, seed: int) -> int:
         payload = self._load_checkpoint_payload(seed)
@@ -360,7 +396,7 @@ class BNNOnlineExperimentRunner:
             n_init=self.config.n_init,
             retrain_every=self.config.retrain_every,
             acquisition_backend=BNNExpectedImprovementBackend(
-                self.config.bnn_backend_config,
+                self.bnn_backend_config_for_seed(seed),
                 device=self.config.device,
             ),
             seed=optimizer_seed,
@@ -403,6 +439,7 @@ class BNNOnlineExperimentRunner:
 
     def _ensure_output_dirs(self) -> None:
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        self.config.resolved_bnn_checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _log_header(self) -> None:
@@ -411,6 +448,12 @@ class BNNOnlineExperimentRunner:
         self._log(f"config: {self.config.config_path} exists={self.config.config_path.exists()}")
         self._log(f"output: {self.config.output_dir}")
         self._log(f"campaign_summary: {self.campaign_summary_path()}")
+        self._log(f"bnn_checkpoint_dir: {self.config.resolved_bnn_checkpoint_dir}")
+        self._log(f"force_retrain_bnn: {self.config.force_retrain_bnn}")
+        self._log(
+            "require_bnn_checkpoint: "
+            f"{self.config.require_bnn_checkpoint and not self.config.force_retrain_bnn}"
+        )
         self._log(f"method: {self.config.method_label}")
         self._log(f"backend: {self.config.backend}")
         self._log(f"seeds: {self.config.seeds}")
@@ -660,6 +703,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-epochs", type=int, default=800)
     parser.add_argument("--update-epochs", type=int, default=20)
     parser.add_argument("--mc-samples", type=int, default=64)
+    parser.add_argument(
+        "--bnn-checkpoint-dir",
+        type=Path,
+        default=None,
+        help="Directory for per-seed BNN .pt checkpoints; defaults to <output-dir>/bnn_checkpoints.",
+    )
+    parser.add_argument(
+        "--force-retrain-bnn",
+        action="store_true",
+        help="Ignore existing BNN .pt checkpoints and train/write them from the current optimizer history.",
+    )
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--reset-checkpoint", action="store_true")
     parser.add_argument(
@@ -688,9 +742,11 @@ def config_from_args(args: argparse.Namespace) -> BNNOnlineExperimentConfig:
         update_epochs=int(args.update_epochs),
         device=str(args.device),
         mc_samples=int(args.mc_samples),
+        force_retrain_bnn=bool(args.force_retrain_bnn),
         config_path=resolve_path(args.config_path),
         replay_dataset_path=resolve_path(args.replay_dataset_path),
         output_dir=resolve_path(args.output_dir),
+        bnn_checkpoint_dir=None if args.bnn_checkpoint_dir is None else resolve_path(args.bnn_checkpoint_dir),
         cache_dir=resolve_path(args.cache_dir),
         queue_root=resolve_path(args.queue_root),
         server_job_timeout_sec=float(args.server_job_timeout_sec),
