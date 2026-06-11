@@ -12,10 +12,15 @@ from .metrics import (
     BandMeanMetric,
     BandMinMetric,
     BandRippleMetric,
+    DifferentialInductanceAtFrequencyMetric,
+    DifferentialQAtFrequencyMetric,
+    DifferentialSRFMetric,
     PeakFrequencyMetric,
     ResponseShapeEnvelopeMetric,
     ResponseShapeEnvelopeSegment,
+    SParameterAtFrequencyMetric,
     SParamMetric,
+    compute_sparameter_metric_values,
 )
 from .sparam_response import SParameterResponse
 
@@ -258,6 +263,9 @@ __all__ = [
     "BandMeanMetric",
     "BandMinMetric",
     "BandRippleMetric",
+    "DifferentialInductanceAtFrequencyMetric",
+    "DifferentialQAtFrequencyMetric",
+    "DifferentialSRFMetric",
     "Constraint",
     "GreaterEqualConstraint",
     "LessEqualConstraint",
@@ -271,6 +279,7 @@ __all__ = [
     "PeakFrequencyMetric",
     "ResponseShapeEnvelopeMetric",
     "ResponseShapeEnvelopeSegment",
+    "SParameterAtFrequencyMetric",
     "SParamMetric",
     "SParameterResponse",
     "TargetMetric",
@@ -278,4 +287,5 @@ __all__ = [
     "UpperBoundHingePenalty",
     "ghz_to_hz",
     "band_ghz_to_hz",
+    "compute_sparameter_metric_values",
 ]

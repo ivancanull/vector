@@ -33,6 +33,9 @@ DEFAULT_SERVER_PORT = 22031
 DEFAULT_USERNAME = "zhanghf"
 DEFAULT_REMOTE_QUEUE_ROOT = "/home/zhanghf/projects/vector/queue"
 DEFAULT_WORKER_CONFIG = REPO_ROOT / "configs" / "worker.yaml"
+DEFAULT_SFTP_CONNECT_TIMEOUT_SEC = 30
+DEFAULT_SFTP_CONNECT_ATTEMPTS = 5
+DEFAULT_SFTP_CONNECT_RETRY_DELAY_SEC = 5.0
 
 
 def _load_runtime(worker_config_path: Path, queue_root_override: Path | None):
@@ -56,6 +59,28 @@ def _remove_stale_local_results(queue_root: Path, job_id: str) -> None:
             print(f"removed_stale_result={path}")
 
 
+def _retrying_upload(
+    *,
+    uploader: SftpResultUploader,
+    result_json: Path,
+    wait_when_empty: bool,
+    poll_interval: int,
+):
+    while True:
+        try:
+            return uploader.upload(result_json)
+        except ConnectionError as exc:
+            if not wait_when_empty:
+                raise
+            print(
+                "status=remote_upload_connect_failed_retrying "
+                f"poll_interval_sec={poll_interval} "
+                f"error={type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(poll_interval)
+
+
 def _build_sftp_settings(
     *,
     server_host: str,
@@ -64,6 +89,9 @@ def _build_sftp_settings(
     ssh_key: Path,
     known_hosts: Path,
     remote_queue_root: str,
+    connect_timeout_sec: int,
+    connect_attempts: int,
+    connect_retry_delay_sec: float,
 ) -> SftpSettings:
     return SftpSettings(
         server_host=server_host,
@@ -72,11 +100,14 @@ def _build_sftp_settings(
         remote_queue_root=remote_queue_root,
         ssh_key=ssh_key,
         known_hosts=known_hosts,
+        connect_timeout_seconds=connect_timeout_sec,
+        connect_attempts=connect_attempts,
+        connect_retry_delay_sec=connect_retry_delay_sec,
     )
 
 
 def _is_retryable_sftp_connect_error(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
+    if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
 
     try:
@@ -110,6 +141,9 @@ def run(
     ssh_key: Path,
     known_hosts: Path,
     remote_queue_root: str,
+    sftp_connect_timeout_sec: int = DEFAULT_SFTP_CONNECT_TIMEOUT_SEC,
+    sftp_connect_attempts: int = DEFAULT_SFTP_CONNECT_ATTEMPTS,
+    sftp_connect_retry_delay_sec: float = DEFAULT_SFTP_CONNECT_RETRY_DELAY_SEC,
     wait_when_empty: bool = True,
     poll_interval_sec: int | None = None,
     idle_status_interval_sec: int = 60,
@@ -129,6 +163,9 @@ def run(
         ssh_key=ssh_key,
         known_hosts=known_hosts,
         remote_queue_root=remote_queue_root,
+        connect_timeout_sec=sftp_connect_timeout_sec,
+        connect_attempts=sftp_connect_attempts,
+        connect_retry_delay_sec=sftp_connect_retry_delay_sec,
     )
     remote_queue = SftpRemoteQueueClient(sftp_settings, cfg.queue_root)
     uploader = SftpResultUploader(queue_root=cfg.queue_root, settings=sftp_settings)
@@ -142,6 +179,8 @@ def run(
                 claim = remote_queue.claim_one()
             except Exception as exc:
                 if not _is_retryable_sftp_connect_error(exc):
+                    raise
+                if not wait_when_empty:
                     raise
                 print(f"{_format_sftp_connect_error(exc)} poll_interval_sec={poll_interval}")
                 time.sleep(poll_interval)
@@ -170,7 +209,12 @@ def run(
         processor.process(claim.local_job_path)
         result_json = find_result_json_for_job(cfg.queue_root, claim.job_id)
         result_state = result_json.parent.name
-        upload_summary = uploader.upload(result_json)
+        upload_summary = _retrying_upload(
+            uploader=uploader,
+            result_json=result_json,
+            wait_when_empty=wait_when_empty,
+            poll_interval=poll_interval,
+        )
         print(f"status={result_state}")
         print(f"result_json={result_json}")
         print(f"uploaded_count={len(upload_summary.uploaded_remote_paths)}")
@@ -193,6 +237,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-key", type=Path, required=True)
     parser.add_argument("--known-hosts", type=Path, required=True)
     parser.add_argument("--remote-queue-root", default=DEFAULT_REMOTE_QUEUE_ROOT)
+    parser.add_argument(
+        "--sftp-connect-timeout-sec",
+        type=int,
+        default=DEFAULT_SFTP_CONNECT_TIMEOUT_SEC,
+        help="Per-attempt SSH/SFTP connection timeout.",
+    )
+    parser.add_argument(
+        "--sftp-connect-attempts",
+        type=int,
+        default=DEFAULT_SFTP_CONNECT_ATTEMPTS,
+        help="How many times to retry transient SSH/SFTP connection failures.",
+    )
+    parser.add_argument(
+        "--sftp-connect-retry-delay-sec",
+        type=float,
+        default=DEFAULT_SFTP_CONNECT_RETRY_DELAY_SEC,
+        help="Delay between SSH/SFTP connection retries.",
+    )
     parser.add_argument(
         "--wait-when-empty",
         action=argparse.BooleanOptionalAction,
@@ -226,6 +288,9 @@ def main() -> int:
         ssh_key=args.ssh_key,
         known_hosts=args.known_hosts,
         remote_queue_root=args.remote_queue_root,
+        sftp_connect_timeout_sec=args.sftp_connect_timeout_sec,
+        sftp_connect_attempts=args.sftp_connect_attempts,
+        sftp_connect_retry_delay_sec=args.sftp_connect_retry_delay_sec,
         wait_when_empty=args.wait_when_empty,
         poll_interval_sec=args.poll_interval_sec,
         idle_status_interval_sec=args.idle_status_interval_sec,

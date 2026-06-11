@@ -13,4 +13,6 @@ job_timeout_sec: 7200
 max_retry_count: 2
 default_export_touchstone: true
 default_export_csv: false
+copy_template_per_job: false
+template_copy_root: null
 preserve_local_project_copy: false

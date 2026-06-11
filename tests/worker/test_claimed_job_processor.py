@@ -6,7 +6,12 @@ from common.io_utils import read_json, write_json
 from worker.schemas import ArtifactPaths, JobResult, TemplatesConfig, WorkerConfig
 from worker.template_registry import TemplateRegistry
 from worker.utils import WorkerError, utc_now
-from worker.worker_main import ClaimedJobProcessor, JobLoggerFactory, MetricExtractor
+from worker.worker_main import (
+    ClaimedJobProcessor,
+    JobLoggerFactory,
+    MetricExtractor,
+    _resolve_artifact_path,
+)
 
 
 def _worker_config(tmp_path: Path) -> WorkerConfig:
@@ -186,3 +191,15 @@ def test_claimed_job_processor_missing_touchstone_writes_metric_failure(tmp_path
 
     result = read_json(cfg.queue_root / "failed" / "job-001.result.json")
     assert result["error_message"] == "metric_extraction_failure"
+
+
+def test_resolve_artifact_path_rebases_relative_queue_artifact(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+
+    assert _resolve_artifact_path(queue_root, "results/job-001.s2p") == queue_root / "results" / "job-001.s2p"
+
+
+def test_resolve_artifact_path_preserves_external_artifact(tmp_path: Path) -> None:
+    touchstone = tmp_path / "ansys_export" / "job-001.s2p"
+
+    assert _resolve_artifact_path(tmp_path / "queue", str(touchstone)) == touchstone

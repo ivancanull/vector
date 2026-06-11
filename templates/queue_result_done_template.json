@@ -1,17 +1,17 @@
 {
-  "job_id": "spiral_batch_20260422_c01",
+  "job_id": "spiral_t3_validation_nominal",
   "status": "done",
   "worker_name": "hfss_win01",
-  "start_time": "2026-04-22T08:10:00Z",
-  "finish_time": "2026-04-22T08:12:00Z",
+  "start_time": "2026-06-04T08:10:00Z",
+  "finish_time": "2026-06-04T08:12:00Z",
   "metrics": {
     "max_s11_db": -0.20,
     "min_s21_db": -22.86
   },
   "artifacts": {
-    "touchstone": "results/spiral_batch_20260422_c01.s2p",
-    "csv": "results/spiral_batch_20260422_c01.csv",
-    "log": "results/spiral_batch_20260422_c01.log"
+    "touchstone": "results/spiral_t3_nominal.s2p",
+    "csv": "results/spiral_t3_nominal.csv",
+    "log": "results/spiral_t3_validation_nominal.log"
   },
   "error_message": null
 }

@@ -31,7 +31,32 @@ def test_basic_task_set_variables() -> None:
 
 def test_basic_task_analyze_setup_success() -> None:
     class FakeSetup:
-        def analyze(self):
+        is_solved = True
+
+    class FakeHfss:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bool]] = []
+
+        def analyze_setup(self, name: str, *, blocking: bool):
+            self.calls.append((name, blocking))
+            return True
+
+        def get_setup(self, name: str):
+            assert name == "Setup1"
+            return FakeSetup()
+
+    hfss = FakeHfss()
+    HfssSession(hfss).analyze("Setup1")
+
+    assert hfss.calls == [("Setup1", True)]
+
+
+def test_basic_task_analyze_setup_falls_back_to_setup_object() -> None:
+    class FakeSetup:
+        is_solved = True
+
+        def analyze(self, *, blocking: bool):
+            assert blocking is True
             return True
 
     class FakeHfss:
@@ -43,13 +68,10 @@ def test_basic_task_analyze_setup_success() -> None:
 
 
 def test_basic_task_analyze_setup_failure_raises_worker_error() -> None:
-    class FakeSetup:
-        def analyze(self):
-            return False
-
     class FakeHfss:
-        def get_setup(self, _name: str):
-            return FakeSetup()
+        def analyze_setup(self, _name: str, *, blocking: bool):
+            assert blocking is True
+            return False
 
     with pytest.raises(WorkerError) as exc:
         HfssSession(FakeHfss()).analyze("Setup1")
@@ -67,6 +89,24 @@ def test_basic_task_export_touchstone_uses_user_guide_signature(tmp_path: Path) 
             return str(out_path)
 
     exported = HfssSession(FakeHfss()).export_touchstone("Setup1", "Sweep", out_path)
+    assert exported == out_path
+
+
+def test_basic_task_export_touchstone_passes_absolute_output_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    out_path = Path("results") / "result.s2p"
+    expected_output = out_path.resolve()
+
+    class FakeHfss:
+        def export_touchstone(self, **kwargs):
+            assert kwargs["output_file"] == str(expected_output)
+            expected_output.write_text("s2p", encoding="utf-8")
+            return str(expected_output)
+
+    exported = HfssSession(FakeHfss()).export_touchstone("Setup1", "Sweep", out_path)
+
     assert exported == out_path
 
 

@@ -70,6 +70,24 @@ def test_si_generation_is_seed_deterministic() -> None:
     assert [case.output_filename for case in first.cases] == [case.output_filename for case in second.cases]
 
 
+def test_new_spiral_template_generation_uses_template_specific_design() -> None:
+    exp = script._build_experiment(
+        template_name="spiral_inductor_t3_template_v1",
+        batch_id="batch",
+        count=2,
+        seed=123,
+        design_name="SpiralInductorT3",
+        setup_name="Setup1",
+        sweep_name="Sweep",
+    )
+
+    assert exp.template_name == "spiral_inductor_t3_template_v1"
+    assert exp.design_name == "SpiralInductorT3"
+    assert exp.setup_name == "Setup1"
+    assert exp.sweep_name == "Sweep"
+    assert len(exp.cases) == 2
+
+
 def test_submit_writes_expected_pending_jobs_for_template(tmp_path: Path) -> None:
     queue_root = tmp_path / "queue"
     exp = script.generate_random_bclf_experiment(

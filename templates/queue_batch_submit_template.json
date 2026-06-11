@@ -1,7 +1,7 @@
 {
-  "batch_id": "spiral_batch_20260422",
-  "template_name": "si_template_v1",
-  "design_name": "HFSSDesign1",
+  "batch_id": "spiral_t3_validation",
+  "template_name": "spiral_inductor_t3_template_v1",
+  "design_name": "SpiralInductorT3",
   "setup_name": "Setup1",
   "sweep_name": "Sweep",
   "metrics_to_extract": [
@@ -15,24 +15,54 @@
   "retry_count": 0,
   "cases": [
     {
-      "case_id": "c01",
+      "case_id": "nominal",
       "variables": {
-        "Din": "55um",
+        "Din": "60um",
         "H": "2um",
         "S": "1.5um",
         "W": "15um"
       },
-      "output_filename": "spiral_Din55_S1d5_W15.s2p"
+      "output_filename": "spiral_t3_nominal.s2p"
     },
     {
-      "case_id": "c02",
+      "case_id": "min_geometry",
       "variables": {
-        "Din": "60um",
+        "Din": "50um",
         "H": "2um",
-        "S": "1.2um",
-        "W": "14um"
+        "S": "1um",
+        "W": "12um"
       },
-      "output_filename": "spiral_Din60_S1d2_W14.s2p"
+      "output_filename": "spiral_t3_min_geometry.s2p"
+    },
+    {
+      "case_id": "max_geometry",
+      "variables": {
+        "Din": "70um",
+        "H": "2um",
+        "S": "2um",
+        "W": "18um"
+      },
+      "output_filename": "spiral_t3_max_geometry.s2p"
+    },
+    {
+      "case_id": "wide_low_spacing",
+      "variables": {
+        "Din": "70um",
+        "H": "2um",
+        "S": "1um",
+        "W": "12um"
+      },
+      "output_filename": "spiral_t3_wide_low_spacing.s2p"
+    },
+    {
+      "case_id": "compact_high_spacing",
+      "variables": {
+        "Din": "50um",
+        "H": "2um",
+        "S": "2um",
+        "W": "18um"
+      },
+      "output_filename": "spiral_t3_compact_high_spacing.s2p"
     }
   ]
 }

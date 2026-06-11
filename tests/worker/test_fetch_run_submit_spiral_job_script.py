@@ -17,7 +17,9 @@ def _claim(job_id: str, running_path: Path) -> ClaimedJob:
     )
 
 
-def _install_fake_remote_queue(monkeypatch, claims: list[ClaimedJob | None | BaseException]) -> None:
+def _install_fake_remote_queue(
+    monkeypatch, claims: list[ClaimedJob | None | BaseException]
+) -> None:
     class _FakeRemoteQueueClient:
         def __init__(self, _settings, _local_queue_root: Path) -> None:
             pass
@@ -31,8 +33,13 @@ def _install_fake_remote_queue(monkeypatch, claims: list[ClaimedJob | None | Bas
     monkeypatch.setattr(fetch_run_submit_job, "SftpRemoteQueueClient", _FakeRemoteQueueClient)
 
 
-def _install_fake_uploader(monkeypatch, uploaded_remote_paths: list[str]) -> list[Path]:
+def _install_fake_uploader(
+    monkeypatch,
+    uploaded_remote_paths: list[str],
+    failures: list[BaseException] | None = None,
+) -> list[Path]:
     uploaded_result_paths: list[Path] = []
+    pending_failures = list(failures or [])
 
     class _FakeUploader:
         def __init__(self, *, queue_root: Path, settings) -> None:
@@ -40,6 +47,8 @@ def _install_fake_uploader(monkeypatch, uploaded_remote_paths: list[str]) -> lis
             self.settings = settings
 
         def upload(self, result_json_path: Path):
+            if pending_failures:
+                raise pending_failures.pop(0)
             uploaded_result_paths.append(result_json_path)
             return SimpleNamespace(uploaded_remote_paths=uploaded_remote_paths)
 
@@ -135,12 +144,14 @@ def test_waits_then_claims_when_pending_appears(monkeypatch, tmp_path: Path, cap
     assert "claimed=/home/zhanghf/projects/vector/queue/running/job_wait_001.json" in out
 
 
-def test_sftp_connect_timeout_waits_and_retries(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_waits_after_remote_connect_failure_then_claims(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
     queue_root = tmp_path / "queue"
-    running_path = queue_root / "running" / "job_sftp_retry_001.json"
+    running_path = queue_root / "running" / "job_retry_001.json"
     running_path.parent.mkdir(parents=True, exist_ok=True)
-    running_path.write_text('{"job_id":"job_sftp_retry_001"}', encoding="utf-8")
-    cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=30)
+    running_path.write_text('{"job_id":"job_retry_001"}', encoding="utf-8")
+    cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=2)
     monkeypatch.setattr(
         fetch_run_submit_job,
         "_load_runtime",
@@ -149,8 +160,8 @@ def test_sftp_connect_timeout_waits_and_retries(monkeypatch, tmp_path: Path, cap
     _install_fake_remote_queue(
         monkeypatch,
         [
-            TimeoutError("connect timed out"),
-            _claim("job_sftp_retry_001", running_path),
+            ConnectionError("SFTP connect failed after 5 attempts"),
+            _claim("job_retry_001", running_path),
         ],
     )
     sleeps: list[int] = []
@@ -160,12 +171,13 @@ def test_sftp_connect_timeout_waits_and_retries(monkeypatch, tmp_path: Path, cap
         assert path == running_path
         (queue_root / "done").mkdir(parents=True, exist_ok=True)
         write_json(
-            queue_root / "done" / "job_sftp_retry_001.result.json",
-            {"job_id": "job_sftp_retry_001", "status": "done", "artifacts": {"log": "results/job_sftp_retry_001.log"}},
+            queue_root / "done" / "job_retry_001.result.json",
+            {"job_id": "job_retry_001", "status": "done", "artifacts": {"log": "results/job_retry_001.log"}},
         )
 
     _install_fake_processor(monkeypatch, _process)
     _install_fake_uploader(monkeypatch, ["one"])
+
     rc = fetch_run_submit_job.run(
         worker_config=tmp_path / "worker.yaml",
         queue_root=None,
@@ -180,10 +192,10 @@ def test_sftp_connect_timeout_waits_and_retries(monkeypatch, tmp_path: Path, cap
 
     out = capsys.readouterr().out
     assert rc == 0
-    assert sleeps == [30]
-    assert "status=sftp_connect_failed error_class=TimeoutError" in out
-    assert "poll_interval_sec=30" in out
-    assert "claimed=/home/zhanghf/projects/vector/queue/running/job_sftp_retry_001.json" in out
+    assert sleeps == [2]
+    assert "status=sftp_connect_failed error_class=ConnectionError" in out
+    assert "poll_interval_sec=2" in out
+    assert "claimed=/home/zhanghf/projects/vector/queue/running/job_retry_001.json" in out
 
 
 def test_run_loop_processes_multiple_jobs_without_exiting(
@@ -317,6 +329,62 @@ def test_failed_result_upload_path(monkeypatch, tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert rc == 0
     assert "status=failed" in out
+
+
+def test_retries_upload_connection_failure_before_continuing(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    queue_root = tmp_path / "queue"
+    running_path = queue_root / "running" / "job_upload_retry_001.json"
+    running_path.parent.mkdir(parents=True, exist_ok=True)
+    running_path.write_text('{"job_id":"job_upload_retry_001"}', encoding="utf-8")
+    cfg = SimpleNamespace(queue_root=queue_root, logs_dir=tmp_path / "logs", poll_interval_sec=1)
+    monkeypatch.setattr(
+        fetch_run_submit_job,
+        "_load_runtime",
+        lambda _worker_config, _queue_root_override: (cfg, object(), object()),
+    )
+    _install_fake_remote_queue(monkeypatch, [_claim("job_upload_retry_001", running_path)])
+
+    def _process(path):
+        assert path == running_path
+        (queue_root / "done").mkdir(parents=True, exist_ok=True)
+        write_json(
+            queue_root / "done" / "job_upload_retry_001.result.json",
+            {
+                "job_id": "job_upload_retry_001",
+                "status": "done",
+                "artifacts": {"log": "results/job_upload_retry_001.log"},
+            },
+        )
+
+    _install_fake_processor(monkeypatch, _process)
+    uploaded = _install_fake_uploader(
+        monkeypatch,
+        ["a"],
+        failures=[ConnectionError("SFTP connect failed after 5 attempts")],
+    )
+    sleeps: list[int] = []
+    monkeypatch.setattr(fetch_run_submit_job.time, "sleep", lambda sec: sleeps.append(sec))
+
+    rc = fetch_run_submit_job.run(
+        worker_config=tmp_path / "worker.yaml",
+        queue_root=None,
+        server_host="10.15.89.240",
+        server_port=22031,
+        username="zhanghf",
+        ssh_key=tmp_path / "id",
+        known_hosts=tmp_path / "known_hosts",
+        remote_queue_root="/home/zhanghf/projects/vector/queue",
+        once=True,
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert sleeps == [1]
+    assert len(uploaded) == 1
+    assert "status=remote_upload_connect_failed_retrying poll_interval_sec=1" in out
+    assert "status=done" in out
 
 
 def test_removes_stale_failed_result_before_processing(monkeypatch, tmp_path: Path, capsys) -> None:

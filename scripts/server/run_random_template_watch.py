@@ -29,7 +29,8 @@ from server.experiment_models import (  # noqa: E402
 from server.queue_manager import QueueManager  # noqa: E402
 
 
-SUPPORTED_TEMPLATES = {"bclf_template_v1", "si_template_v1"}
+SPIRAL_TEMPLATE_NAMES = {"si_template_v1", "spiral_inductor_t3_template_v1"}
+SUPPORTED_TEMPLATES = {"bclf_template_v1", *SPIRAL_TEMPLATE_NAMES}
 
 
 @dataclass(frozen=True)
@@ -221,7 +222,7 @@ def _build_experiment(
             setup_name=setup_name,
             sweep_name=sweep_name,
         )
-    if template_name == "si_template_v1":
+    if template_name in SPIRAL_TEMPLATE_NAMES:
         return generate_random_spiral_experiment(
             batch_id=batch_id,
             count=count,
@@ -360,9 +361,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--timeout-sec", type=int, default=7200)
     parser.add_argument("--poll-interval-sec", type=int, default=10)
-    parser.add_argument("--design-name", default="HFSSDesign1")
-    parser.add_argument("--setup-name", default="Setup1")
-    parser.add_argument("--sweep-name", default="Sweep")
+    parser.add_argument("--design-name", default=None)
+    parser.add_argument("--setup-name", default=None)
+    parser.add_argument("--sweep-name", default=None)
     return parser.parse_args()
 
 
@@ -377,14 +378,30 @@ def run(args: argparse.Namespace) -> int:
         batch_id = _now_batch_id(prefix)
 
     try:
+        design_name = args.design_name
+        setup_name = args.setup_name
+        sweep_name = args.sweep_name
+        if args.template_name == "bclf_template_v1":
+            design_name = design_name or "HFSSDesign1"
+            setup_name = setup_name or "Setup1"
+            sweep_name = sweep_name or "Sweep"
+        elif args.template_name == "si_template_v1":
+            design_name = design_name or "HFSSDesign1"
+            setup_name = setup_name or "Setup1"
+            sweep_name = sweep_name or "Sweep"
+        elif args.template_name == "spiral_inductor_t3_template_v1":
+            design_name = design_name or "SpiralInductorT3"
+            setup_name = setup_name or "Setup1"
+            sweep_name = sweep_name or "Sweep"
+
         experiment = _build_experiment(
             template_name=args.template_name,
             batch_id=batch_id,
             count=args.count,
             seed=args.seed,
-            design_name=args.design_name,
-            setup_name=args.setup_name,
-            sweep_name=args.sweep_name,
+            design_name=design_name,
+            setup_name=setup_name,
+            sweep_name=sweep_name,
         )
     except ValueError as exc:
         print(f"invalid_args={exc}", file=sys.stderr)
@@ -396,8 +413,8 @@ def run(args: argparse.Namespace) -> int:
     print(f"batch_id={resolved_batch_id}")
     print(
         "setup_sweep_override="
-        f"{args.setup_name if args.setup_name else '<template-default>'}/"
-        f"{args.sweep_name if args.sweep_name else '<template-default>'}"
+        f"{setup_name if setup_name else '<template-default>'}/"
+        f"{sweep_name if sweep_name else '<template-default>'}"
     )
     for path in emitted:
         print(f"submitted={path}")

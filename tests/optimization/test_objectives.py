@@ -9,6 +9,9 @@ from optimization.metrics import (
     BandMaxMetric,
     BandMeanMetric,
     BandMinMetric,
+    DifferentialInductanceAtFrequencyMetric,
+    DifferentialQAtFrequencyMetric,
+    DifferentialSRFMetric,
     PeakFrequencyMetric,
     ResponseShapeEnvelopeMetric,
 )
@@ -26,8 +29,12 @@ from optimization.objectives import (
 from optimization.optimization_spec import (
     BCLFOptimizationSpec,
     BCLFResponseShapeOptimizationSpec,
+    InductorOptimizationSpec,
+    OptimizationSpec,
     build_bclf_objective,
     build_bclf_optimization_spec,
+    build_inductor_objective,
+    build_inductor_optimization_spec,
 )
 from optimization.sparam_response import SParameterResponse
 
@@ -44,6 +51,21 @@ def _from_db(freqs: np.ndarray, s11_db: np.ndarray, s21_db: np.ndarray) -> tuple
     s_params[0, 0, :] = 10 ** (np.asarray(s11_db, dtype=float) / 20.0)
     s_params[1, 0, :] = 10 ** (np.asarray(s21_db, dtype=float) / 20.0)
     return freqs, s_params
+
+
+def _inductor_sparams(freqs: np.ndarray, l_nh: np.ndarray, q_values: np.ndarray) -> np.ndarray:
+    z0 = 50.0
+    s_params = np.zeros((2, 2, len(freqs)), dtype=complex)
+    for idx, freq in enumerate(freqs):
+        omega = 2.0 * np.pi * float(freq)
+        x = omega * float(l_nh[idx]) * 1e-9
+        r = x / float(q_values[idx])
+        zdiff = r + 1j * x
+        z_matrix = np.asarray([[zdiff / 2.0, 0.0], [0.0, zdiff / 2.0]], dtype=complex)
+        ident = np.eye(2, dtype=complex)
+        s_matrix = (z_matrix - z0 * ident) @ np.linalg.inv(z_matrix + z0 * ident)
+        s_params[:, :, idx] = s_matrix
+    return s_params
 
 
 def test_basic_metrics_compute() -> None:
@@ -182,6 +204,53 @@ def test_bclf_compatibility_wrappers() -> None:
     spec = build_bclf_optimization_spec()
     assert isinstance(spec, BCLFOptimizationSpec)
     obj = build_bclf_objective()
+    assert isinstance(obj, Objective)
+
+
+def test_inductor_differential_metrics_use_raw_sparams() -> None:
+    freqs = np.array([4.0e9, 5.0e9, 6.0e9])
+    s = _inductor_sparams(
+        freqs,
+        l_nh=np.array([1.0, 1.2, -0.5]),
+        q_values=np.array([10.0, 12.0, -10.0]),
+    )
+    resp = SParameterResponse.from_sparams(freqs, s)
+
+    assert DifferentialInductanceAtFrequencyMetric(5.0e9).compute(resp) == pytest.approx(1.2, abs=1e-6)
+    assert DifferentialQAtFrequencyMetric(5.0e9).compute(resp) == pytest.approx(12.0, abs=1e-6)
+    assert DifferentialSRFMetric().compute(resp) == pytest.approx(5.6666666667, abs=1e-6)
+
+
+def test_inductor_optimization_spec_uses_shared_objective_function() -> None:
+    freqs = np.array([4.0e9, 5.0e9, 6.0e9])
+    s = _inductor_sparams(
+        freqs,
+        l_nh=np.array([1.0, 1.2, 1.1]),
+        q_values=np.array([10.0, 14.0, 12.0]),
+    )
+    spec = InductorOptimizationSpec(
+        target_freq_ghz=5.0,
+        target_l_nh=1.2,
+        l_scale_nh=0.2,
+        q_weight=0.01,
+        min_srf_ghz=None,
+    )
+
+    assert InductorOptimizationSpec.evaluate is OptimizationSpec.evaluate
+    out = spec.evaluate(freqs, s)
+    direct = spec.to_objective().evaluate(freqs, s)
+
+    assert out.scalar_objective() == pytest.approx(direct.objective, abs=1e-12)
+    assert out.metrics["L_5GHz_nH"] == pytest.approx(1.2, abs=1e-6)
+    assert out.metrics["Q_5GHz"] == pytest.approx(14.0, abs=1e-6)
+    assert out.objective_components["target_inductance"] == pytest.approx(0.0, abs=1e-6)
+    assert out.objective_components["maximize_q"] == pytest.approx(-0.14, abs=1e-6)
+
+
+def test_inductor_compatibility_wrappers() -> None:
+    spec = build_inductor_optimization_spec()
+    assert isinstance(spec, InductorOptimizationSpec)
+    obj = build_inductor_objective()
     assert isinstance(obj, Objective)
 
 

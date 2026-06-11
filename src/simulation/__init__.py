@@ -8,6 +8,7 @@ from .result_store import (
     FilesystemResultStore,
     SimulationResultStore,
     TouchstoneNamingStrategy,
+    VariableTouchstoneNamingStrategy,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "Simulator",
     "SimulatorFactory",
     "TouchstoneNamingStrategy",
+    "VariableTouchstoneNamingStrategy",
 ]

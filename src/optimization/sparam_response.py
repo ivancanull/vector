@@ -11,6 +11,7 @@ class SParameterResponse:
 
     freq_hz: np.ndarray
     s_db: dict[str, np.ndarray]
+    s_params: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         freq = np.asarray(self.freq_hz, dtype=float).reshape(-1)
@@ -26,6 +27,9 @@ class SParameterResponse:
 
         object.__setattr__(self, "freq_hz", freq)
         object.__setattr__(self, "s_db", normalized)
+        if self.s_params is not None:
+            raw = _normalize_sparams_shape(self.s_params, freq_count=freq.size)
+            object.__setattr__(self, "s_params", raw)
 
     @classmethod
     def from_sparams(
@@ -36,13 +40,7 @@ class SParameterResponse:
         port_map: dict[str, tuple[int, int]] | None = None,
     ) -> "SParameterResponse":
         freq = np.asarray(freq_hz, dtype=float).reshape(-1)
-        s_vals = np.asarray(s_params, dtype=complex)
-        if s_vals.ndim != 3:
-            raise ValueError("s_params must be a 3D array shaped (ports, ports, freqs)")
-        if s_vals.shape[2] != freq.size:
-            raise ValueError(
-                f"s_params frequency axis length {s_vals.shape[2]} does not match freq_hz length {freq.size}"
-            )
+        s_vals = _normalize_sparams_shape(s_params, freq_count=freq.size)
 
         mapping = port_map or {
             "S11": (0, 0),
@@ -62,7 +60,7 @@ class SParameterResponse:
 
         if not curves:
             raise ValueError("No valid S-parameter curves available from provided port_map")
-        return cls(freq_hz=freq, s_db=curves)
+        return cls(freq_hz=freq, s_db=curves, s_params=s_vals)
 
     def get_db(self, name: str) -> np.ndarray:
         key = str(name).upper()
@@ -93,3 +91,16 @@ def _validate_band(band_hz: tuple[float, float]) -> tuple[float, float]:
     if lo >= hi:
         raise ValueError("band_hz must satisfy low < high")
     return lo, hi
+
+
+def _normalize_sparams_shape(s_params: np.ndarray, *, freq_count: int) -> np.ndarray:
+    values = np.asarray(s_params, dtype=complex)
+    if values.ndim != 3:
+        raise ValueError("s_params must be a 3D array shaped (ports, ports, freqs)")
+    if values.shape[2] == freq_count:
+        return values
+    if values.shape[0] == freq_count and values.shape[1] == values.shape[2]:
+        return np.moveaxis(values, 0, 2)
+    raise ValueError(
+        f"s_params frequency axis length {values.shape[2]} does not match freq_hz length {freq_count}"
+    )

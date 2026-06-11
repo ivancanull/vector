@@ -30,6 +30,21 @@ class AtFrequencyMetric(SParamMetric):
 
 
 @dataclass(frozen=True)
+class SParameterAtFrequencyMetric(SParamMetric):
+    s_name: str
+    freq_hz: float
+
+    @property
+    def name(self) -> str:
+        return f"{self.s_name.upper()}_{_fmt_ghz(self.freq_hz)}GHz_dB"
+
+    def compute(self, response: SParameterResponse) -> float:
+        freq = response.freq_hz
+        idx = int(np.argmin(np.abs(freq - float(self.freq_hz))))
+        return float(response.get_db(self.s_name)[idx])
+
+
+@dataclass(frozen=True)
 class BandMeanMetric(SParamMetric):
     s_name: str
     band_hz: tuple[float, float]
@@ -102,6 +117,57 @@ class PeakFrequencyMetric(SParamMetric):
         vals = response.band_values(self.s_name, self.search_band_hz)
         pos = int(np.argmax(vals))
         return float(freqs[pos])
+
+
+@dataclass(frozen=True)
+class DifferentialInductanceAtFrequencyMetric(SParamMetric):
+    freq_hz: float
+    z0_ohm: float = 50.0
+
+    @property
+    def name(self) -> str:
+        return f"L_{_fmt_ghz(self.freq_hz)}GHz_nH"
+
+    def compute(self, response: SParameterResponse) -> float:
+        zdiff = _differential_impedance(response, z0_ohm=self.z0_ohm)
+        idx = int(np.argmin(np.abs(response.freq_hz - float(self.freq_hz))))
+        omega = 2.0 * np.pi * response.freq_hz[idx]
+        return float(np.imag(zdiff[idx]) / omega * 1e9)
+
+
+@dataclass(frozen=True)
+class DifferentialQAtFrequencyMetric(SParamMetric):
+    freq_hz: float
+    z0_ohm: float = 50.0
+
+    @property
+    def name(self) -> str:
+        return f"Q_{_fmt_ghz(self.freq_hz)}GHz"
+
+    def compute(self, response: SParameterResponse) -> float:
+        zdiff = _differential_impedance(response, z0_ohm=self.z0_ohm)
+        idx = int(np.argmin(np.abs(response.freq_hz - float(self.freq_hz))))
+        return float(np.imag(zdiff[idx]) / np.real(zdiff[idx]))
+
+
+@dataclass(frozen=True)
+class DifferentialSRFMetric(SParamMetric):
+    z0_ohm: float = 50.0
+
+    @property
+    def name(self) -> str:
+        return "SRF_GHz"
+
+    def compute(self, response: SParameterResponse) -> float:
+        zdiff = _differential_impedance(response, z0_ohm=self.z0_ohm)
+        imag_z = np.imag(zdiff)
+        for index in range(1, len(response.freq_hz)):
+            if imag_z[index - 1] > 0 and imag_z[index] <= 0:
+                x0, x1 = response.freq_hz[index - 1], response.freq_hz[index]
+                y0, y1 = imag_z[index - 1], imag_z[index]
+                fraction = y0 / (y0 - y1) if y0 != y1 else 0.0
+                return float((x0 + fraction * (x1 - x0)) / 1e9)
+        return float(response.freq_hz[-1] / 1e9)
 
 
 @dataclass(frozen=True)
@@ -224,8 +290,27 @@ class ResponseShapeEnvelopeMetric(SParamMetric):
         return float(np.mean(np.square(all_violations)))
 
 
+def compute_sparameter_metric_values(
+    response: SParameterResponse,
+    metrics: list[SParamMetric] | tuple[SParamMetric, ...],
+    *,
+    nonfinite_as_none: bool = True,
+) -> dict[str, float | None]:
+    values: dict[str, float | None] = {}
+    for metric in metrics:
+        value = float(metric.compute(response))
+        values[metric.name] = _finite_or_none(value) if nonfinite_as_none else value
+    return values
+
+
 def _fmt_band(band: tuple[float, float]) -> str:
     return f"{float(band[0]):.0f}_{float(band[1]):.0f}"
+
+
+def _fmt_ghz(freq_hz: float) -> str:
+    value = float(freq_hz) / 1e9
+    text = f"{value:.12g}"
+    return text.replace(".", "d")
 
 
 def _validate_band(band_hz: tuple[float, float]) -> tuple[float, float]:
@@ -235,3 +320,29 @@ def _validate_band(band_hz: tuple[float, float]) -> tuple[float, float]:
     if lo >= hi:
         raise ValueError("band_hz must satisfy low < high")
     return lo, hi
+
+
+def _differential_impedance(response: SParameterResponse, *, z0_ohm: float) -> np.ndarray:
+    if response.s_params is None:
+        raise ValueError("Differential inductor metrics require raw complex s_params")
+    s_values = np.asarray(response.s_params, dtype=complex)
+    if s_values.shape[0] < 2 or s_values.shape[1] < 2:
+        raise ValueError("Differential inductor metrics require a 2-port response")
+
+    s_by_freq = np.moveaxis(s_values[:2, :2, :], 2, 0)
+    ident = np.eye(2, dtype=complex)
+    zdiff = np.empty(s_by_freq.shape[0], dtype=complex)
+    for index, s_matrix in enumerate(s_by_freq):
+        numerator = ident + s_matrix
+        denominator = ident - s_matrix
+        try:
+            z_matrix = float(z0_ohm) * numerator @ np.linalg.inv(denominator)
+        except np.linalg.LinAlgError:
+            z_matrix = float(z0_ohm) * numerator @ np.linalg.pinv(denominator)
+        zdiff[index] = z_matrix[0, 0] + z_matrix[1, 1] - z_matrix[0, 1] - z_matrix[1, 0]
+    return zdiff
+
+
+def _finite_or_none(value: complex | float) -> float | None:
+    real_value = float(np.real(value))
+    return real_value if np.isfinite(real_value) else None

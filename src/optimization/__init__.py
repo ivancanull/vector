@@ -7,6 +7,9 @@ from .objectives import (
     BandMeanMetric,
     BandMinMetric,
     BandRippleMetric,
+    DifferentialInductanceAtFrequencyMetric,
+    DifferentialQAtFrequencyMetric,
+    DifferentialSRFMetric,
     GreaterEqualConstraint,
     MaximizeMetric,
     LowerBoundHingePenalty,
@@ -19,20 +22,25 @@ from .objectives import (
     PeakFrequencyMetric,
     ResponseShapeEnvelopeMetric,
     ResponseShapeEnvelopeSegment,
+    SParameterAtFrequencyMetric,
     SParameterResponse,
     TargetMetric,
     UpperBoundHingePenalty,
     LessEqualConstraint,
     ghz_to_hz,
     band_ghz_to_hz,
+    compute_sparameter_metric_values,
 )
 from .optimization_spec import (
     BCLFOptimizationSpec,
     BCLFResponseShapeOptimizationSpec,
+    InductorOptimizationSpec,
     OptimizationSpec,
     SpecResults,
     build_bclf_objective,
     build_bclf_optimization_spec,
+    build_inductor_objective,
+    build_inductor_optimization_spec,
 )
 from .recorder import ExperimentRecorder, RecorderOutput
 from .optimizer_base import (
@@ -47,13 +55,20 @@ from .optimizer_bo import (
     OWAFSBNNOptimizer,
     OptimizerBoTorch,
 )
-from .bnn_acquisition import (
-    BNNCheckpointError,
-    BNNExpectedImprovementAcquisition,
-    BNNExpectedImprovementBackend,
-    ScalarBNNConfig,
-    ScalarBNNRegressor,
-)
+try:
+    from .bnn_acquisition import (
+        BNNCheckpointError,
+        BNNExpectedImprovementAcquisition,
+        BNNExpectedImprovementBackend,
+        ScalarBNNConfig,
+        ScalarBNNRegressor,
+    )
+except ModuleNotFoundError:
+    BNNCheckpointError = None
+    BNNExpectedImprovementAcquisition = None
+    BNNExpectedImprovementBackend = None
+    ScalarBNNConfig = None
+    ScalarBNNRegressor = None
 from .botorch_acquisition import (
     AcquisitionFitResult,
     BoTorchAcquisitionBackend,
@@ -61,7 +76,11 @@ from .botorch_acquisition import (
     GPqExpectedImprovementBackend,
     GPqLogEIAcquisitionBackend,
 )
-from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
+try:
+    from .optimizer_ann import OnlineANNOptimizer, OptimizerANN
+except ModuleNotFoundError:
+    OnlineANNOptimizer = None
+    OptimizerANN = None
 from .optimizer_lhs_random import OptimizerLHSRandom
 from .optimizer_random import OptimizerRandom
 from .simulators import HfssSimulator, OWAFSServerQueueSimulator, ReplaySimulator, ServerQueueSimulator, SimulationResult, Simulator
@@ -87,10 +106,14 @@ __all__ = [
     "CandidateSpace",
     "ContinuousCandidateSpace",
     "DiscreteCandidateSpace",
+    "DifferentialInductanceAtFrequencyMetric",
+    "DifferentialQAtFrequencyMetric",
+    "DifferentialSRFMetric",
     "EIAcquisition",
     "EvaluationRecord",
     "ExperimentRecorder",
     "GreaterEqualConstraint",
+    "InductorOptimizationSpec",
     "GPSurrogate",
     "GPExpectedImprovementBackend",
     "GPqExpectedImprovementBackend",
@@ -120,6 +143,7 @@ __all__ = [
     "PeakFrequencyMetric",
     "ResponseShapeEnvelopeMetric",
     "ResponseShapeEnvelopeSegment",
+    "SParameterAtFrequencyMetric",
     "SParameterResponse",
     "TargetMetric",
     "UpperBoundHingePenalty",
@@ -127,8 +151,11 @@ __all__ = [
     "BCLFResponseShapeOptimizationSpec",
     "build_bclf_objective",
     "build_bclf_optimization_spec",
+    "build_inductor_objective",
+    "build_inductor_optimization_spec",
     "ghz_to_hz",
     "band_ghz_to_hz",
+    "compute_sparameter_metric_values",
     "PassiveDataset",
     "RecorderOutput",
     "ReplaySimulator",

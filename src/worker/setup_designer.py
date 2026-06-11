@@ -65,10 +65,7 @@ class HfssSetupDesigner:
         if existing:
             deleted = setup.delete_sweep(sweep_name)
             if deleted is False:
-                raise WorkerError(
-                    "setup_definition_failure",
-                    f"Failed to replace existing sweep {sweep_name} in setup {setup.name}",
-                )
+                return existing
 
         if frequency_points_ghz is not None:
             sweep = self._create_single_point_sweep(setup, sweep_name, frequency_points_ghz)

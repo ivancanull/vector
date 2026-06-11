@@ -173,6 +173,8 @@ class WorkerConfig(BaseModel):
     max_retry_count: int = Field(default=2, ge=0)
     default_export_touchstone: bool = True
     default_export_csv: bool = True
+    copy_template_per_job: bool = False
+    template_copy_root: Path | None = None
     preserve_local_project_copy: bool = False
 
 

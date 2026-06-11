@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from common.io_utils import write_json
+from worker import queue_loop
 from worker.queue_loop import SftpResultUploader, SftpSettings, find_result_json_for_job
 
 
@@ -232,6 +233,54 @@ def test_strict_host_key_unknown_host_raises(monkeypatch, tmp_path: Path) -> Non
             known_hosts_path=known_hosts,
             remote_queue_root="/home/zhanghf/projects/vector/queue",
         ).upload(result_json)
+
+
+def test_connect_sftp_retries_transient_timeout_then_succeeds(monkeypatch, tmp_path: Path) -> None:
+    ssh_key = tmp_path / "id_key"
+    known_hosts = tmp_path / "known_hosts"
+    ssh_key.write_text("dummy", encoding="utf-8")
+    known_hosts.write_text("dummy", encoding="utf-8")
+    connect_kwargs: list[dict] = []
+    sleeps: list[float] = []
+
+    class _FlakySSHClient(_FakeSSHClient):
+        def connect(self, **kwargs):
+            connect_kwargs.append(kwargs)
+            if len(connect_kwargs) < 3:
+                raise TimeoutError("temporary network timeout")
+            super().connect(**kwargs)
+
+    fake_paramiko = SimpleNamespace(
+        SSHClient=_FlakySSHClient,
+        RejectPolicy=type("RejectPolicy", (), {}),
+        SSHException=Exception,
+        AuthenticationException=type("AuthenticationException", (Exception,), {}),
+        BadAuthenticationType=type("BadAuthenticationType", (Exception,), {}),
+        BadHostKeyException=type("BadHostKeyException", (Exception,), {}),
+        PasswordRequiredException=type("PasswordRequiredException", (Exception,), {}),
+    )
+    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+    monkeypatch.setattr(queue_loop.time, "sleep", lambda sec: sleeps.append(sec))
+
+    ssh_client, sftp = queue_loop.connect_sftp_with_timeout(
+        SftpSettings(
+            server_host="10.15.89.240",
+            server_port=22031,
+            username="zhanghf",
+            remote_queue_root="/home/zhanghf/projects/vector/queue",
+            ssh_key=ssh_key,
+            known_hosts=known_hosts,
+        ),
+        timeout_seconds=7,
+        attempts=3,
+        retry_delay_sec=0.25,
+    )
+
+    assert ssh_client.connected is True
+    assert sftp is ssh_client.sftp
+    assert len(connect_kwargs) == 3
+    assert all(kwargs["timeout"] == 7 for kwargs in connect_kwargs)
+    assert sleeps == [0.25, 0.25]
 
 
 def test_find_result_json_for_job_prefers_existing_state(tmp_path: Path) -> None:

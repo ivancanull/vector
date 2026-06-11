@@ -2,33 +2,38 @@
 
 This guide documents two linked workflows for testing the Linux server queue and Windows HFSS worker together.
 
-## Idea 1: Worker SFTP Queue Loop
+## Idea 1: Worker Remote Fetch/Run/Submit Loop
 
-The worker loop runs on the Windows HFSS machine. It claims jobs from the Linux server queue over SFTP, runs each job locally, uploads the result bundle, and archives uploaded local result JSONs.
+The worker loop runs on the Windows HFSS machine. It claims jobs from the
+Linux server queue over SFTP, runs each job locally, and uploads the result
+bundle. Jobs modify AEDT variables through the worker job JSON, the same way
+BCLF jobs do; the AEDT template is not regenerated per case.
 
 Recommended Windows command:
 
 ```powershell
 cd D:\vector
 $env:PYTHONPATH = "src"
-.\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_job.py `
   --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
+  --ssh-key C:\Users\Huifan\.ssh\id_ed25519_vector `
+  --known-hosts C:\Users\Huifan\.ssh\known_hosts `
   --remote-queue-root /home/zhanghf/projects/vector/queue
 ```
-
-Default SSH files are `%USERPROFILE%\.ssh\id_ed25519` and `%USERPROFILE%\.ssh\known_hosts` on Windows. Add `--ssh-key` and `--known-hosts` only when the worker uses different paths.
 
 One-iteration smoke test:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\worker\run_queue_loop_sftp.py `
+.\.venv\Scripts\python.exe scripts\worker\fetch_run_submit_job.py `
   --worker-config configs\worker.yaml `
   --server-host 10.15.89.240 `
   --server-port 22031 `
   --username zhanghf `
+  --ssh-key C:\Users\Huifan\.ssh\id_ed25519_vector `
+  --known-hosts C:\Users\Huifan\.ssh\known_hosts `
   --remote-queue-root /home/zhanghf/projects/vector/queue `
   --once
 ```
@@ -48,23 +53,22 @@ Timeout and stale handling:
 - A stale local running job writes a normal failed result with `error_message="stale_running_job"`.
 - These failures use the same result contract as HFSS failures, so server-side tools can parse them.
 
-## Idea 2: Server Five Random Cases Submit-and-Watch
+## Idea 2: New Spiral Fixed Cases Submit-And-Run
 
-The server random test script generates five spiral inductor cases, submits them to `queue/pending`, watches only those submitted job IDs, and prints a final console summary.
+The checked-in fixed batch uses the new generated spiral template:
+`spiral_inductor_t3_template_v1`. It submits `Din/W/S/H` variables exactly like
+BCLF submits geometry variables.
 
-Recommended Linux command:
+Recommended Linux server command:
 
 ```bash
 cd /home/zhanghf/projects/vector
-PYTHONPATH=src:. python scripts/server/submit_random_spiral_watch.py \
-  --queue-root queue \
-  --count 5 \
-  --seed 123 \
-  --timeout-sec 7200 \
-  --poll-interval-sec 10
+PYTHONPATH=src:. python scripts/server/submit_spiral_batch.py \
+  --batch templates/queue_batch_submit_template.json \
+  --queue-root queue
 ```
 
-Default random ranges are intentionally near the checked-in examples:
+The fixed validation range is:
 
 - `Din`: `50-70um`
 - `H`: fixed `2um`
@@ -106,13 +110,17 @@ PYTHONPATH=src:. python scripts/server/submit_random_spiral_watch.py \
 - `failed` means the worker returned a parseable failure result.
 - `missing` means the server timed out before receiving a result JSON.
 
-Fixed-batch fallback:
+Optional random new-spiral submit-and-watch:
 
 ```bash
 cd /home/zhanghf/projects/vector
-PYTHONPATH=src:. python scripts/server/submit_spiral_batch.py \
-  --batch scripts/server/examples/spiral_batch.example.json \
-  --queue-root queue
+PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
+  --template-name spiral_inductor_t3_template_v1 \
+  --queue-root queue \
+  --count 5 \
+  --seed 123 \
+  --timeout-sec 7200 \
+  --poll-interval-sec 10
 ```
 
 ## Troubleshooting

@@ -103,6 +103,21 @@ def test_spiral_builder_calls_fake_pyaedt_in_expected_order() -> None:
     assert any(event[0] == "frequency_sweep" and event[1]["name"] == "Sweep" for event in events)
 
 
+def test_spiral_builder_prefers_public_lumped_port_api() -> None:
+    definition = SpiralTemplateDeviceDefinition.load(DEVICE_DEFINITION)
+    events: list[tuple] = []
+
+    class FakeHfssWithPrivateBoundary(FakeHfss):
+        def _create_boundary(self, *args, **kwargs):
+            events.append(("private_boundary", args, kwargs))
+            return "private"
+
+    SpiralTemplateBuilder(definition).build(FakeHfssWithPrivateBoundary(events))
+
+    assert [event[1]["name"] for event in events if event[0] == "lumped_port"] == ["Port1", "Port2"]
+    assert not any(event[0] == "private_boundary" for event in events)
+
+
 def test_spiral_generator_saves_project_with_fake_factory(tmp_path: Path) -> None:
     definition = SpiralTemplateDeviceDefinition.load(DEVICE_DEFINITION)
     definition = replace(

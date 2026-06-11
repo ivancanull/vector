@@ -21,6 +21,41 @@ All four online families use the current BCLF target in
 [BCLF Optimization Target And Online Settings](../bclf_optimization_target.md).
 The optimizer minimizes scalar objective; lower `best_so_far` is better.
 
+## Planned Inductor LHS Initial Dataset
+
+- experiment_id: `inductor_lhs_initial_v1`
+- status: `debug-data-collection`
+- simulator path: notebook writes local queue jobs; worker runs HFSS
+- worker mode: notebook-created local filesystem queue, linear worker, copy-on-run AEDT
+- worker script: `scripts/worker/run_local_queue_worker.py`
+- notebook: `notebooks/inductor_local_candidate_space_run.ipynb`
+- queue root: `.runtime/inductor_notebook_<stamp>/queue`
+- Touchstone output: `D:/ansys/spiral_inductor_s_parameters_export`
+
+### Research Question
+
+What Spiral Inductor parameter range gives physically reasonable `.s2p`
+responses around the nominal target, before starting BO/BNN optimization?
+
+### Setup
+
+- Template: `spiral_inductor_t3_template_v1`
+- AEDT golden template: `D:/ansys/spiral_inductor_template_v1.aedt`
+- Variables: `Din`, `W`, `S`, `H`
+- Initial LHS ranges: `Din 50-70um`, `W 12-18um`, `S 1-2um`, `H=2um`
+- Initial design resolution: `Din 0.1um`, `W 0.1um`, `S 0.1um`, `H fixed`
+- Geometry rule: `Din > 2*(W+S)`
+- Initial samples: `20`, fixed seed
+- Optimization spec: `InductorOptimizationSpec`, built from shared
+  `Objective` terms using differential `L`, `Q`, and `SRF` metrics
+- Notebook summary metrics: `L_5GHz_nH`, `Q_5GHz`, `SRF_GHz`,
+  `S11_5GHz_dB`, `S21_5GHz_dB`
+
+### Current Status
+
+The interface is prepared but no paper claim should be made until the 20-case
+LHS queue run completes and the exported Touchstone files are summarized.
+
 ## Experiment Card: BO Online Baseline
 
 - experiment_id: `bo_online_general_v1`

@@ -44,6 +44,24 @@ class BandpassFilterNamingStrategy:
         return "_".join(tokens) + ".s2p"
 
 
+class VariableTouchstoneNamingStrategy:
+    """Generic variable-token Touchstone naming for simulator result caches."""
+
+    def __init__(self, *, prefix: str) -> None:
+        if not prefix:
+            raise ValueError("prefix must be non-empty")
+        self.prefix = str(prefix)
+
+    def build_filename(self, request: SimulationInput, *, port_num: int) -> str:
+        tokens: list[str] = [self.prefix]
+        for name in request.variable_order:
+            if name not in request.variables:
+                raise ValueError(f"Missing simulation variable for naming: {name}")
+            value = float(request.variables[name])
+            tokens.append(f"{name}_{_to_touchstone_value(value)}")
+        return "_".join(tokens) + f".s{int(port_num)}p"
+
+
 class SimulationResultStore(Protocol):
     def lookup(self, request: SimulationInput) -> CachedArtifact | None:
         ...

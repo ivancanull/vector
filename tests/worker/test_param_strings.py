@@ -1,4 +1,5 @@
 from worker.param_strings import (
+    build_spiral_inductor_export_filename,
     build_spiral_inductor_export_path,
     build_spiral_inductor_param_string,
     str_p,
@@ -21,3 +22,17 @@ def test_build_spiral_inductor_export_path_matches_recorded_script() -> None:
 def test_str_p_preserves_integers_and_rewrites_decimals() -> None:
     assert str_p(55) == "55"
     assert str_p(1.5) == "1d5"
+
+
+def test_build_spiral_inductor_export_filename_supports_notebook_style() -> None:
+    assert (
+        build_spiral_inductor_export_filename(
+            60.0,
+            1.5,
+            15.0,
+            counter=7,
+            counter_width=3,
+            value_precision=2,
+        )
+        == "spiral_inductor_example_HFSSDesign007_Din_60_S_1d5_W_15.s2p"
+    )

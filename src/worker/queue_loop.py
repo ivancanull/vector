@@ -14,6 +14,11 @@ from common.paths import ensure_runtime_dirs
 from worker.utils import as_posix_rel
 
 
+DEFAULT_SFTP_CONNECT_TIMEOUT_SECONDS = 30
+DEFAULT_SFTP_CONNECT_ATTEMPTS = 5
+DEFAULT_SFTP_CONNECT_RETRY_DELAY_SEC = 5.0
+
+
 @dataclass(frozen=True)
 class SftpSettings:
     server_host: str
@@ -22,6 +27,9 @@ class SftpSettings:
     remote_queue_root: str
     ssh_key: Path
     known_hosts: Path
+    connect_timeout_seconds: int = DEFAULT_SFTP_CONNECT_TIMEOUT_SECONDS
+    connect_attempts: int = DEFAULT_SFTP_CONNECT_ATTEMPTS
+    connect_retry_delay_sec: float = DEFAULT_SFTP_CONNECT_RETRY_DELAY_SEC
 
 
 @dataclass(frozen=True)
@@ -160,10 +168,43 @@ def setup_loop_logger(logs_dir: Path) -> logging.Logger:
 
 
 def connect_sftp(settings: SftpSettings):
-    return connect_sftp_with_timeout(settings, timeout_seconds=30)
+    return connect_sftp_with_timeout(
+        settings,
+        timeout_seconds=settings.connect_timeout_seconds,
+        attempts=settings.connect_attempts,
+        retry_delay_sec=settings.connect_retry_delay_sec,
+    )
 
 
-def connect_sftp_with_timeout(settings: SftpSettings, *, timeout_seconds: int):
+def _is_retryable_sftp_connect_error(exc: BaseException, paramiko_module) -> bool:
+    non_retryable_names = (
+        "AuthenticationException",
+        "BadAuthenticationType",
+        "BadHostKeyException",
+        "PasswordRequiredException",
+    )
+    non_retryable_types = tuple(
+        error_type
+        for name in non_retryable_names
+        if isinstance((error_type := getattr(paramiko_module, name, None)), type)
+    )
+    if non_retryable_types and isinstance(exc, non_retryable_types):
+        return False
+
+    retryable_types: list[type[BaseException]] = [TimeoutError, OSError, EOFError]
+    ssh_exception = getattr(paramiko_module, "SSHException", None)
+    if isinstance(ssh_exception, type):
+        retryable_types.append(ssh_exception)
+    return isinstance(exc, tuple(retryable_types))
+
+
+def connect_sftp_with_timeout(
+    settings: SftpSettings,
+    *,
+    timeout_seconds: int,
+    attempts: int | None = None,
+    retry_delay_sec: float | None = None,
+):
     if not settings.ssh_key.exists():
         raise FileNotFoundError(f"SSH key not found: {settings.ssh_key}")
     if not settings.known_hosts.exists():
@@ -171,19 +212,60 @@ def connect_sftp_with_timeout(settings: SftpSettings, *, timeout_seconds: int):
 
     import paramiko  # type: ignore
 
-    ssh_client = paramiko.SSHClient()
-    ssh_client.load_host_keys(str(settings.known_hosts))
-    ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    ssh_client.connect(
-        hostname=settings.server_host,
-        port=settings.server_port,
-        username=settings.username,
-        key_filename=str(settings.ssh_key),
-        look_for_keys=False,
-        allow_agent=False,
-        timeout=timeout_seconds,
+    max_attempts = max(1, int(attempts if attempts is not None else settings.connect_attempts))
+    delay_sec = max(
+        0.0,
+        float(
+            retry_delay_sec
+            if retry_delay_sec is not None
+            else settings.connect_retry_delay_sec
+        ),
     )
-    return ssh_client, ssh_client.open_sftp()
+    last_error: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        ssh_client = paramiko.SSHClient()
+        try:
+            ssh_client.load_host_keys(str(settings.known_hosts))
+            ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            ssh_client.connect(
+                hostname=settings.server_host,
+                port=settings.server_port,
+                username=settings.username,
+                key_filename=str(settings.ssh_key),
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=timeout_seconds,
+                banner_timeout=timeout_seconds,
+                auth_timeout=timeout_seconds,
+            )
+            return ssh_client, ssh_client.open_sftp()
+        except Exception as exc:
+            try:
+                ssh_client.close()
+            except Exception:
+                pass
+
+            if not _is_retryable_sftp_connect_error(exc, paramiko):
+                raise
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            print(
+                "sftp_connect_retry="
+                f"{attempt + 1}/{max_attempts} "
+                f"host={settings.server_host} "
+                f"port={settings.server_port} "
+                f"delay_sec={delay_sec:g} "
+                f"error={type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            if delay_sec > 0:
+                time.sleep(delay_sec)
+
+    raise ConnectionError(
+        "SFTP connect failed after "
+        f"{max_attempts} attempts to {settings.server_host}:{settings.server_port}"
+    ) from last_error
 
 
 def close_sftp(ssh_client, sftp) -> None:
@@ -489,7 +571,7 @@ class SftpResultUploader:
         *,
         queue_root: Path,
         settings: SftpSettings,
-        timeout_seconds: int = 30,
+        timeout_seconds: int | None = None,
     ) -> None:
         self.queue_root = queue_root
         self.settings = settings
@@ -505,7 +587,13 @@ class SftpResultUploader:
         start = time.monotonic()
         ssh_client, sftp = connect_sftp_with_timeout(
             self.settings,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=(
+                self.timeout_seconds
+                if self.timeout_seconds is not None
+                else self.settings.connect_timeout_seconds
+            ),
+            attempts=self.settings.connect_attempts,
+            retry_delay_sec=self.settings.connect_retry_delay_sec,
         )
         uploaded_remote_paths: list[str] = []
         total_bytes = 0

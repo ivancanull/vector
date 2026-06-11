@@ -576,7 +576,7 @@ class SpiralTemplateBuilder:
             integration_line=port2_line,
         )
 
-    def _nominal_port_integration_lines(self) -> tuple[list[list[str]], list[list[str]]]:
+    def _nominal_port_integration_lines(self) -> tuple[list[list[float]], list[list[float]]]:
         din = self.definition.variables["Din"].default
         width = self.definition.variables["W"].default
         spacing = self.definition.variables["S"].default
@@ -589,12 +589,12 @@ class SpiralTemplateBuilder:
         bridge_zc = z0 + height + INNER_BRIDGE_CLEARANCE_UM + height / 2.0
         return (
             [
-                [_um(outer + FEED_EXTENSION_WIDTHS * width), _um(-outer), _um(zc)],
-                [_um(outer + (FEED_EXTENSION_WIDTHS + 1) * width), _um(-outer), _um(zc)],
+                [outer + FEED_EXTENSION_WIDTHS * width, -outer, zc],
+                [outer + (FEED_EXTENSION_WIDTHS + 1) * width, -outer, zc],
             ],
             [
-                [_um(outer + FEED_EXTENSION_WIDTHS * width), _um(inner), _um(bridge_zc)],
-                [_um(outer + (FEED_EXTENSION_WIDTHS + 1) * width), _um(inner), _um(bridge_zc)],
+                [outer + FEED_EXTENSION_WIDTHS * width, inner, bridge_zc],
+                [outer + (FEED_EXTENSION_WIDTHS + 1) * width, inner, bridge_zc],
             ],
         )
 
@@ -604,7 +604,7 @@ class SpiralTemplateBuilder:
         *,
         name: str,
         sheet,
-        integration_line: list[list[str]],
+        integration_line: list[list[float]],
         reference: str | None = None,
     ) -> None:
         solution_type = str(getattr(hfss, "solution_type", self.definition.hfss.solution_type))
@@ -618,32 +618,6 @@ class SpiralTemplateBuilder:
                 create_port_sheet=False,
                 impedance=50,
                 name=name,
-            )
-            return
-        create_boundary = getattr(hfss, "_create_boundary", None)
-        if callable(create_boundary):
-            sheet_name = getattr(sheet, "name", sheet)
-            create_boundary(
-                name,
-                {
-                    "Objects": [str(sheet_name)],
-                    "DoDeembed": False,
-                    "RenormalizeAllTerminals": True,
-                    "Modes": {
-                        "Mode1": {
-                            "ModeNum": 1,
-                            "UseIntLine": True,
-                            "IntLine": {"Start": integration_line[0], "End": integration_line[1]},
-                            "AlignmentGroup": 0,
-                            "CharImp": "Zpi",
-                            "RenormImp": "50ohm",
-                        }
-                    },
-                    "ShowReporterFilter": False,
-                    "ReporterFilter": [True],
-                    "Impedance": "50ohm",
-                },
-                "Lumped Port",
             )
             return
         lumped_port = getattr(hfss, "lumped_port", None)

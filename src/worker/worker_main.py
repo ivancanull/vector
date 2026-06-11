@@ -37,6 +37,13 @@ def _copy_job_log(job_logger, job_log_src: Path, log_artifact_target: Path) -> N
     shutil.copy2(job_log_src, log_artifact_target)
 
 
+def _resolve_artifact_path(queue_root: Path, artifact_path: str) -> Path:
+    path = Path(artifact_path)
+    if path.is_absolute():
+        return path
+    return queue_root / path
+
+
 class MetricExtractor:
     def extract(self, touchstone_path: Path, metrics: list[str], *, job_id: str) -> dict[str, float]:
         return compute_metrics(touchstone_path, metrics, job_context={"job_id": job_id})
@@ -160,7 +167,7 @@ class ClaimedJobProcessor:
             result_artifacts = execution_result.artifacts
             job_logger.info("artifact export finished artifacts=%s", result_artifacts.model_dump())
             touchstone_path = (
-                self.cfg.queue_root / result_artifacts.touchstone
+                _resolve_artifact_path(self.cfg.queue_root, result_artifacts.touchstone)
                 if result_artifacts.touchstone
                 else None
             )

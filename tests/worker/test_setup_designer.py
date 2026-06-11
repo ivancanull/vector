@@ -310,6 +310,36 @@ def test_setup_designer_uses_single_point_sweep_for_job_frequency_points() -> No
     assert sweep.props["SaveFields"] is False
 
 
+def test_setup_designer_reuses_existing_sweep_when_delete_fails() -> None:
+    from worker.setup_designer import HfssSetupDesigner
+
+    class LockedSweepSetup(FakeSetup):
+        def delete_sweep(self, name: str) -> bool:
+            return False
+
+    class LockedSweepHfss(FakeHfss):
+        def create_setup(self, name: str) -> FakeSetup:
+            setup = LockedSweepSetup(name)
+            self.setups.append(setup)
+            return setup
+
+    hfss = LockedSweepHfss()
+    setup = hfss.create_setup("Setup1")
+    existing = setup.add_sweep("Sweep1")
+
+    resolved = HfssSetupDesigner().ensure_setup(
+        hfss,
+        setup_name="Setup1",
+        sweep_name="Sweep1",
+        sweep_config=_hfss_sweep_config(),
+    )
+
+    assert resolved.setup_name == "Setup1"
+    assert resolved.sweep_name == "Sweep1"
+    assert setup.get_sweep("Sweep1") is existing
+    assert len(setup.sweeps) == 1
+
+
 def test_setup_designer_raises_when_setup_cannot_create_sweep() -> None:
     from worker.setup_designer import HfssSetupDesigner
 
@@ -380,7 +410,7 @@ def test_execute_job_calls_setup_designer_before_analysis_and_export(
             out_path.write_text("s2p", encoding="utf-8")
             return out_path
 
-        def close(self, close_desktop: bool) -> None:
+        def close(self, close_desktop: bool, close_projects: bool = False) -> None:
             events.append("close")
 
     class FakeSessionFactory:

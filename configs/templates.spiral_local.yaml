@@ -7,3 +7,12 @@ templates:
     hfss_sweep:
       sweep_type: "interpolating"
       sweep_data: "LINC 0GHz 4GHz 201"
+
+  spiral_inductor_t3_template_v1:
+    project_path: "D:/ansys/spiral_inductor_template_v1.aedt"
+    design_name: "SpiralInductorT3"
+    setup_name: "Setup1"
+    sweep_name: "Sweep"
+    hfss_sweep:
+      sweep_type: "interpolating"
+      sweep_data: "LINC 0.1GHz 30GHz 601"

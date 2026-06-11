@@ -10,6 +10,9 @@ from .metrics import (
     BandMaxMetric,
     BandMeanMetric,
     BandMinMetric,
+    DifferentialInductanceAtFrequencyMetric,
+    DifferentialQAtFrequencyMetric,
+    DifferentialSRFMetric,
     ResponseShapeEnvelopeMetric,
     ResponseShapeEnvelopeSegment,
     UnionBandMaxMetric,
@@ -21,8 +24,10 @@ from .objectives import (
     MinimizeMetric,
     Objective,
     ObjectiveTerm,
+    TargetMetric,
     UpperBoundHingePenalty,
     band_ghz_to_hz,
+    ghz_to_hz,
 )
 
 
@@ -245,6 +250,68 @@ class BCLFResponseShapeOptimizationSpec(OptimizationSpec):
         object.__setattr__(self, "frequency_bands_ghz", frequency_bands_ghz)
 
 
+class InductorOptimizationSpec(OptimizationSpec):
+    """Spiral inductor spec built from the shared Objective/Metric framework."""
+
+    def __init__(
+        self,
+        *,
+        target_freq_ghz: float = 5.0,
+        target_l_nh: float = 1.2,
+        l_scale_nh: float = 0.2,
+        q_weight: float = 0.01,
+        min_srf_ghz: float | None = 10.0,
+        srf_penalty_weight: float = 0.2,
+        z0_ohm: float = 50.0,
+    ) -> None:
+        if target_freq_ghz <= 0:
+            raise ValueError("target_freq_ghz must be > 0")
+        if l_scale_nh <= 0:
+            raise ValueError("l_scale_nh must be > 0")
+        if q_weight < 0:
+            raise ValueError("q_weight must be >= 0")
+        if srf_penalty_weight < 0:
+            raise ValueError("srf_penalty_weight must be >= 0")
+
+        target_hz = ghz_to_hz(target_freq_ghz)
+        l_metric = DifferentialInductanceAtFrequencyMetric(target_hz, z0_ohm=z0_ohm)
+        q_metric = DifferentialQAtFrequencyMetric(target_hz, z0_ohm=z0_ohm)
+
+        objective_terms: list[ObjectiveTerm] = [
+            TargetMetric(
+                name="target_inductance",
+                metric=l_metric,
+                target=float(target_l_nh),
+                scale=float(l_scale_nh),
+                weight=1.0,
+            )
+        ]
+        if q_weight > 0:
+            objective_terms.append(
+                MaximizeMetric(
+                    name="maximize_q",
+                    metric=q_metric,
+                    weight=float(q_weight),
+                )
+            )
+        if min_srf_ghz is not None and srf_penalty_weight > 0:
+            objective_terms.append(
+                LowerBoundHingePenalty(
+                    name="srf_lower_bound",
+                    metric=DifferentialSRFMetric(z0_ohm=z0_ohm),
+                    bound=float(min_srf_ghz),
+                    weight=float(srf_penalty_weight),
+                )
+            )
+
+        object.__setattr__(self, "objective_terms", objective_terms)
+        object.__setattr__(self, "constraints", [])
+        frequency_bands_ghz: dict[str, float | tuple[float, float]] = {"target": float(target_freq_ghz)}
+        if min_srf_ghz is not None:
+            frequency_bands_ghz["srf_min"] = float(min_srf_ghz)
+        object.__setattr__(self, "frequency_bands_ghz", frequency_bands_ghz)
+
+
 def _bclf_s21_response_shape_segments(
     *,
     passband_hz: tuple[float, float],
@@ -306,3 +373,11 @@ def build_bclf_optimization_spec(**kwargs) -> OptimizationSpec:
 def build_bclf_objective(**kwargs) -> Objective:
     """Compatibility wrapper for legacy callers. Prefer BCLFOptimizationSpec(...).to_objective()."""
     return BCLFOptimizationSpec(**kwargs).to_objective()
+
+
+def build_inductor_optimization_spec(**kwargs) -> OptimizationSpec:
+    return InductorOptimizationSpec(**kwargs)
+
+
+def build_inductor_objective(**kwargs) -> Objective:
+    return InductorOptimizationSpec(**kwargs).to_objective()
