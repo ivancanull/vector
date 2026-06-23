@@ -10,7 +10,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-PLAYGROUND = ROOT / "experiments" / "hfss_skill_playground"
+PLAYGROUND = ROOT / "studies" / "hfss_skill_playground"
 
 
 def _load_analyzer():

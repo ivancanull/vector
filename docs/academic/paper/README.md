@@ -1,0 +1,32 @@
+# Paper Docs Handbook
+
+This section is the paper-facing documentation layer for this repository.
+
+Audience:
+- Internal collaborators writing methods, experiments, and results sections.
+
+Principles:
+- Keep operational/runbook docs in `docs/engineering/`.
+- Keep paper narrative, experiment metadata, and claim traceability in `docs/academic/`.
+- Treat notebooks and files under `experiments/` as data-generation source of truth.
+
+## Navigation
+
+- Methods: [methods.md](methods.md)
+- Optimization experiment backbone: [../../engineering/optimization/optimization_experiment_backbone.md](../../engineering/optimization/optimization_experiment_backbone.md)
+- Experiment design and protocol: [experiments.md](experiments.md)
+- Claim-to-evidence map (figures/tables): [results_index.md](results_index.md)
+- Reproducibility policy: [reproducibility.md](reproducibility.md)
+- TCAD journal progress: [tcad_journal_progress.md](tcad_journal_progress.md)
+- TCAD journal TODO: [tcad_journal_todo.md](tcad_journal_todo.md)
+- TCAD journal idea log: [tcad_journal_idea_log.md](tcad_journal_idea_log.md)
+- Canonical experiment-card template: [templates/experiment_card.md](templates/experiment_card.md)
+
+## Minimum Maintenance Rules
+
+- Any new reported result must update at least one experiment card in the same PR/commit.
+- Any new plotted claim must be added to `results_index.md` with exact artifact paths.
+- Every experiment card must carry one status:
+  - `draft`
+  - `paper-candidate`
+  - `camera-ready`

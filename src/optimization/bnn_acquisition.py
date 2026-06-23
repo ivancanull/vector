@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from .botorch_acquisition import AcquisitionFitResult
+from .botorch_acquisition import AcquisitionFitResult, AcquisitionScoreResult
 from .optimizer_base import SelectionResult
 from .optimization_spec import OptimizationSpec
 
@@ -23,6 +23,25 @@ except ImportError:  # pragma: no cover - tests often put src/ directly on PYTHO
     from bayesian.modules.models import MultiOutputBNN
 
 
+SOFT_EI_TAU = 1.0
+
+
+def _soft_improvement(best_objective: float, metric_samples: np.ndarray, *, tau: float = SOFT_EI_TAU) -> np.ndarray:
+    """Smooth minimization improvement used by response-BNN EI variants.
+
+    Hard EI can collapse to all zeros when every Monte Carlo response sample is
+    worse than the incumbent. The softplus form preserves ordering among
+    near-miss candidates while keeping the same "lower objective is better"
+    direction.
+    """
+
+    tau_value = float(tau)
+    if tau_value <= 0:
+        raise ValueError("tau must be > 0")
+    z = (float(best_objective) - np.asarray(metric_samples, dtype=float)) / tau_value
+    return tau_value * np.logaddexp(0.0, z)
+
+
 @dataclass(frozen=True)
 class ScalarBNNConfig:
     """Training settings for the scalar-objective BNN used by OptimizerBoTorch."""
@@ -31,6 +50,8 @@ class ScalarBNNConfig:
     prior_sigma: float = 0.1
     epochs: int = 400
     update_epochs: int = 10
+    update_epoch_schedule: str = "constant"
+    update_epoch_multiplier: int = 20
     warm_start: bool = True
     initial_train_size: int | None = None
     batch_size: int = 32
@@ -53,10 +74,20 @@ class ScalarBNNConfig:
         variant = str(self.surrogate_variant).strip().lower()
         if variant not in {"raw", "fourier"}:
             raise ValueError("surrogate_variant must be 'raw' or 'fourier'")
+        schedule = str(self.update_epoch_schedule).strip().lower()
+        if schedule not in {"constant", "linear_online_iteration"}:
+            raise ValueError("update_epoch_schedule must be 'constant' or 'linear_online_iteration'")
+        if int(self.update_epochs) <= 0:
+            raise ValueError("update_epochs must be > 0")
+        if int(self.update_epoch_multiplier) <= 0:
+            raise ValueError("update_epoch_multiplier must be > 0")
+        if self.initial_train_size is not None and int(self.initial_train_size) < 0:
+            raise ValueError("initial_train_size must be >= 0 when provided")
         bands = tuple(float(v) for v in self.fourier_bands)
         if variant == "fourier" and not bands:
             raise ValueError("fourier_bands must be non-empty when surrogate_variant='fourier'")
         object.__setattr__(self, "surrogate_variant", variant)
+        object.__setattr__(self, "update_epoch_schedule", schedule)
         object.__setattr__(self, "fourier_bands", bands)
 
     @classmethod
@@ -363,7 +394,7 @@ class BNNExpectedImprovementBackend:
             checkpoint_changed = False
             if self._should_warm_start(dataset):
                 assert self._surrogate is not None
-                self._surrogate.update(dataset, train_indices, epochs=int(self.config.update_epochs))
+                self._surrogate.update(dataset, train_indices, epochs=self._update_epoch_count(dataset.n_samples))
                 self._last_fit_mode = "warm_start_update"
                 checkpoint_changed = True
             elif (
@@ -383,7 +414,10 @@ class BNNExpectedImprovementBackend:
                         self._surrogate.update(
                             dataset,
                             train_indices,
-                            epochs=int(stale_count) * int(self.config.update_epochs),
+                            epochs=self._stale_update_epoch_count(
+                                loaded_train_count=loaded_train_count,
+                                current_train_count=dataset.n_samples,
+                            ),
                         )
                         self._last_fit_mode = "checkpoint_load_warm_start_update"
                         checkpoint_changed = True
@@ -539,6 +573,8 @@ class BNNExpectedImprovementBackend:
                 "acquisition": str(self.config.acquisition),
                 "initial_train_size": self.config.initial_train_size,
                 "update_epochs": int(self.config.update_epochs),
+                "update_epoch_schedule": str(self.config.update_epoch_schedule),
+                "update_epoch_multiplier": int(self.config.update_epoch_multiplier),
             },
         )
 
@@ -555,7 +591,37 @@ class BNNExpectedImprovementBackend:
         if initial is None or train_count <= int(initial):
             return int(self.config.epochs)
         extra_samples = int(train_count) - int(initial)
+        if self.config.update_epoch_schedule == "linear_online_iteration":
+            return int(self.config.epochs) + sum(
+                int(self.config.update_epoch_multiplier) * online_iteration
+                for online_iteration in range(1, extra_samples + 1)
+            )
         return int(self.config.epochs) + extra_samples * int(self.config.update_epochs)
+
+    def _update_epoch_count(self, train_count: int) -> int:
+        if self.config.update_epoch_schedule == "constant":
+            return int(self.config.update_epochs)
+        initial = int(self.config.initial_train_size or 0)
+        online_iteration = max(1, int(train_count) - initial)
+        return int(self.config.update_epoch_multiplier) * int(online_iteration)
+
+    def _stale_update_epoch_count(self, *, loaded_train_count: int, current_train_count: int) -> int:
+        loaded = int(loaded_train_count)
+        current = int(current_train_count)
+        missing = max(0, current - loaded)
+        if missing <= 0:
+            return 0
+        if self.config.update_epoch_schedule == "constant":
+            return missing * int(self.config.update_epochs)
+
+        initial = int(self.config.initial_train_size or 0)
+        epochs = 0
+        for train_count in range(max(loaded + 1, initial + 1), current + 1):
+            epochs += self._update_epoch_count(train_count)
+        if epochs > 0:
+            return int(epochs)
+        # This only occurs for unusual checkpoints saved before warmup completed.
+        return missing * int(self.config.update_epochs)
 
     def _response_dataset_from_fit_kwargs(self, kwargs: dict[str, Any]) -> BCLFResponseDataset:
         history = list(kwargs.get("history") or [])
@@ -665,9 +731,35 @@ class BNNExpectedImprovementBackend:
         history: list[dict[str, Any]],
         tr_debug: dict[str, Any],
     ) -> SelectionResult:
+        scores = self.score_candidates(
+            candidates_actual=candidates_actual,
+            candidates_normalized=candidates_normalized,
+            history=history,
+            tr_debug=tr_debug,
+        )
+        pos = int(np.argmax(scores.acquisition_score))
+        debug = dict(scores.debug)
+        debug.update({"selected_pos": pos, "best_score": float(scores.acquisition_score[pos])})
+        return SelectionResult(
+            requested_geometry=np.asarray(candidates_actual[pos], dtype=float),
+            predicted_mean=float(scores.predicted_mean[pos]),
+            predicted_uncertainty=float(scores.predicted_uncertainty[pos]),
+            acquisition_score=float(scores.acquisition_score[pos]),
+            selection_debug=debug,
+        )
+
+    def score_candidates(
+        self,
+        *,
+        candidates_actual: np.ndarray,
+        candidates_normalized: np.ndarray,
+        history: list[dict[str, Any]],
+        tr_debug: dict[str, Any] | None = None,
+    ) -> AcquisitionScoreResult:
         if self._torch is None or self._device is None or self._surrogate is None:
             raise RuntimeError("BNN acquisition backend is not fitted")
 
+        _ = candidates_normalized
         Xcand = np.asarray(candidates_actual, dtype=float)
         best_objective = min(float(row["objective"]) for row in history if np.isfinite(float(row["objective"])))
         candidate_dataset = self._candidate_dataset(Xcand)
@@ -679,30 +771,41 @@ class BNNExpectedImprovementBackend:
             return_samples=True,
         )
         metric_samples = self._metric_samples_from_response_samples(response_samples)
-        improvement = np.maximum(float(best_objective) - metric_samples, 0.0)
+        soft_improvement = _soft_improvement(best_objective, metric_samples)
+        soft_expected_improvement = soft_improvement.mean(axis=0)
+        soft_ei_debug = {
+            "soft_ei_tau": float(SOFT_EI_TAU),
+            "soft_improvement_min": float(np.min(soft_expected_improvement)),
+            "soft_improvement_max": float(np.max(soft_expected_improvement)),
+        }
         if self.config.acquisition == "qlogei":
-            scores = np.log(np.maximum(improvement.mean(axis=0), np.finfo(float).tiny))
+            scores = np.log(np.maximum(soft_expected_improvement, np.finfo(float).tiny))
         elif self.config.acquisition in {"qei", "ei"}:
-            scores = improvement.mean(axis=0)
+            scores = soft_expected_improvement
         else:
             mean = metric_samples.mean(axis=0)
             std = metric_samples.std(axis=0)
             scores = -(mean - float(self.config.beta) * std)
-        pos = int(np.argmax(scores))
+            soft_ei_debug = {}
         means = metric_samples.mean(axis=0)
         variances = metric_samples.var(axis=0)
-        return SelectionResult(
-            requested_geometry=np.asarray(candidates_actual[pos], dtype=float),
-            predicted_mean=float(means.reshape(-1)[pos]),
-            predicted_uncertainty=float(np.sqrt(max(float(variances.reshape(-1)[pos]), 0.0))),
-            acquisition_score=float(scores[pos]),
-            selection_debug={
-                "mode": f"bnn_{self.config.acquisition}_discrete",
+        debug_payload = dict(tr_debug or {})
+        candidate_mode = (
+            "resampled"
+            if str(debug_payload.get("candidate_source", "")).startswith("resampled_continuous")
+            else "discrete"
+        )
+        return AcquisitionScoreResult(
+            predicted_mean=np.asarray(means, dtype=float).reshape(-1),
+            predicted_uncertainty=np.sqrt(np.maximum(np.asarray(variances, dtype=float).reshape(-1), 0.0)),
+            acquisition_score=np.asarray(scores, dtype=float).reshape(-1),
+            debug={
+                "mode": f"bnn_{self.config.acquisition}_{candidate_mode}",
                 "model_fit_status": "ok",
-                "selected_pos": pos,
-                "best_score": float(scores[pos]),
                 "candidate_pool_size": int(len(candidates_actual)),
-                **tr_debug,
+                "candidate_batch_size": int(len(candidates_actual)),
+                **debug_payload,
+                **soft_ei_debug,
                 "bnn_runtime": {
                     "device": str(self._device),
                     "dtype": "torch.float32",
@@ -712,6 +815,9 @@ class BNNExpectedImprovementBackend:
                     "mc_samples": int(self.config.mc_samples),
                     "epochs": int(self.config.epochs),
                     "update_epochs": int(self.config.update_epochs),
+                    "update_epoch_schedule": str(self.config.update_epoch_schedule),
+                    "update_epoch_multiplier": int(self.config.update_epoch_multiplier),
+                    "initial_train_size": self.config.initial_train_size,
                     "warm_start": bool(self.config.warm_start),
                     "fit_mode": self._last_fit_mode,
                     "train_count": int(self._last_train_count),

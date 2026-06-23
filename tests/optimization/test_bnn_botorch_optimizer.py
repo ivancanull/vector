@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -14,7 +15,7 @@ from optimization.bnn_acquisition import (
 )
 from optimization.botorch_acquisition import GPqLogEIAcquisitionBackend
 from optimization.botorch_acquisition import AcquisitionFitResult
-from optimization.candidate_space import DiscreteCandidateSpace
+from optimization.candidate_space import ContinuousCandidateSpace, DiscreteCandidateSpace
 from optimization.datasets import PassiveDataset
 from optimization.optimization_spec import OptimizationSpec, SpecResults
 from optimization.optimizer_base import SelectionResult
@@ -66,6 +67,31 @@ class QuadraticSimulator(Simulator):
             actual_geometry=x,
         )
 
+    def simulate_afs(self, geometry: np.ndarray, prediction) -> SimulationResult:
+        _ = prediction
+        result = self.simulate(geometry)
+        metadata = dict(result.metadata)
+        metadata["afs"] = True
+        return SimulationResult(
+            freqs=result.freqs,
+            s_params=result.s_params,
+            status=result.status,
+            metadata=metadata,
+            actual_geometry=result.actual_geometry,
+        )
+
+    def simulate_full_validation(self, geometry: np.ndarray, *, case_id: str) -> SimulationResult:
+        result = self.simulate(geometry)
+        metadata = dict(result.metadata)
+        metadata.update({"full_validation": True, "case_id": case_id})
+        return SimulationResult(
+            freqs=result.freqs,
+            s_params=result.s_params,
+            status=result.status,
+            metadata=metadata,
+            actual_geometry=result.actual_geometry,
+        )
+
 
 def _bclf_like_candidates() -> np.ndarray:
     return np.asarray(
@@ -108,6 +134,66 @@ def _response_history(dataset: PassiveDataset, indices: list[int]) -> list[dict]
             }
         )
     return history
+
+
+@pytest.mark.parametrize("acquisition", ["qlogei", "qei", "ei"])
+def test_bnn_response_soft_ei_ranks_candidates_when_hard_ei_is_zero(acquisition: str) -> None:
+    class FixedResponseSurrogate:
+        surrogate_variant = "raw"
+        trained_epochs = 0
+
+        def predict_s_params(self, candidate_dataset, candidate_indices, *, mc_samples, return_samples):
+            _ = return_samples
+            n_candidates = len(candidate_indices)
+            values = np.asarray([10.0, 8.0, 6.0], dtype=float)[:n_candidates]
+            samples = np.zeros((int(mc_samples), n_candidates, 2, 2, candidate_dataset.n_freqs), dtype=complex)
+            samples[:, :, 0, 0, :] = values.reshape(1, n_candidates, 1)
+            return samples.mean(axis=0), samples
+
+    freqs = np.asarray([3.5e9, 8.7e9], dtype=float)
+    backend = BNNExpectedImprovementBackend(
+        {"acquisition": acquisition, "mc_samples": 3},
+        device="cpu",
+    )
+    backend._torch = object()  # type: ignore[attr-defined]
+    backend._device = "cpu"  # type: ignore[attr-defined]
+    backend._surrogate = FixedResponseSurrogate()  # type: ignore[assignment]
+    backend._train_dataset = SimpleNamespace(
+        variable_order=["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"],
+        freqs=freqs,
+        n_freqs=len(freqs),
+    )
+    backend._optimization_spec = ScalarResponseSpec()
+    backend._last_fit_mode = "test"
+    backend._last_train_count = 1
+
+    candidates = _bclf_like_candidates()[:3]
+    scores = backend.score_candidates(
+        candidates_actual=candidates,
+        candidates_normalized=candidates,
+        history=[{"objective": 0.0}],
+        tr_debug={"candidate_source": "resampled_continuous_bounds"},
+    )
+    result = backend.select(
+        candidates_actual=candidates,
+        candidates_normalized=candidates,
+        history=[{"objective": 0.0}],
+        tr_debug={"candidate_source": "resampled_continuous_bounds"},
+    )
+
+    debug = result.selection_debug or {}
+    assert scores.predicted_mean.shape == (3,)
+    assert scores.predicted_uncertainty.shape == (3,)
+    assert scores.acquisition_score.shape == (3,)
+    assert np.isfinite(scores.acquisition_score).all()
+    assert debug["selected_pos"] == 2
+    assert debug["selected_pos"] == int(np.argmax(scores.acquisition_score))
+    assert debug["soft_ei_tau"] == 1.0
+    assert np.isfinite(float(debug["soft_improvement_min"]))
+    assert np.isfinite(float(debug["soft_improvement_max"]))
+    assert float(debug["soft_improvement_max"]) > float(debug["soft_improvement_min"]) > 0.0
+    if acquisition == "qlogei":
+        assert float(result.acquisition_score) > np.log(np.finfo(float).tiny)
 
 
 def test_scalar_bnn_acquisition_scores_candidates() -> None:
@@ -356,6 +442,111 @@ def test_optimizer_botorch_can_use_bnn_acquisition(tmp_path: Path) -> None:
     assert np.isfinite(float(result.history[-1]["acquisition_score"]))
 
 
+def test_bnn_acquisition_resamples_bounds_for_continuous_space(tmp_path: Path) -> None:
+    variable_order = ["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"]
+    bounds = {
+        "L": (7.7, 7.9),
+        "L1": (8.0, 8.2),
+        "L2": (7.8, 8.0),
+        "W": (0.9, 1.1),
+        "W1": (0.7, 0.9),
+        "W2": (0.9, 1.1),
+        "S1": (0.13, 0.16),
+        "S2": (0.55, 0.60),
+    }
+    optimizer = OptimizerBoTorch(
+        candidate_space=ContinuousCandidateSpace(
+            variable_order=variable_order,
+            variable_bounds=bounds,
+            pool_size=12,
+            seed=29,
+            resolution=0.01,
+        ),
+        simulator=QuadraticSimulator(),
+        optimization_spec=ScalarResponseSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_bnn_continuous"),
+        budget=1,
+        n_init=2,
+        seed=29,
+        run_id="bnn_continuous_resampled",
+        checkpoint_path=tmp_path / "bnn_continuous_resampled.checkpoint.json",
+        acquisition_backend=BNNExpectedImprovementBackend(
+            {
+                "hidden_dims": [8],
+                "epochs": 1,
+                "batch_size": 2,
+                "mc_samples": 4,
+                "bayesian_loss_weight": 1e-5,
+            },
+            device="cpu",
+        ),
+    )
+
+    result = optimizer.run()
+
+    post_init = result.history[-1]
+    assert post_init["selection_debug"]["mode"] == "bnn_qlogei_resampled"
+    assert post_init["selection_debug"]["candidate_source"] == "resampled_continuous_bounds"
+    assert post_init["selection_debug"]["resampled_candidate_target"] == 12
+    assert post_init["selection_debug"]["resampled_candidate_count"] > 0
+    assert all(abs(float(value) / 0.01 - round(float(value) / 0.01)) < 1e-8 for value in post_init["requested_geometry"])
+
+
+def test_owafs_bnn_resamples_bounds_for_continuous_space(tmp_path: Path) -> None:
+    variable_order = ["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"]
+    bounds = {
+        "L": (7.7, 7.9),
+        "L1": (8.0, 8.2),
+        "L2": (7.8, 8.0),
+        "W": (0.9, 1.1),
+        "W1": (0.7, 0.9),
+        "W2": (0.9, 1.1),
+        "S1": (0.13, 0.16),
+        "S2": (0.55, 0.60),
+    }
+    candidate_space = ContinuousCandidateSpace(
+        variable_order=variable_order,
+        variable_bounds=bounds,
+        pool_size=12,
+        seed=31,
+        resolution=0.01,
+    )
+    optimizer = OWAFSBNNOptimizer(
+        candidate_space=candidate_space,
+        simulator=QuadraticSimulator(),
+        optimization_spec=ScalarResponseSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_owafs_bnn_continuous"),
+        budget=2,
+        n_init=2,
+        seed=31,
+        run_id="owafs_bnn_continuous_resampled",
+        checkpoint_path=tmp_path / "owafs_bnn_continuous_resampled.checkpoint.json",
+        acquisition_backend=BNNExpectedImprovementBackend(
+            {
+                "hidden_dims": [8],
+                "epochs": 1,
+                "batch_size": 2,
+                "mc_samples": 4,
+                "bayesian_loss_weight": 1e-5,
+            },
+            device="cpu",
+        ),
+    )
+
+    result = optimizer.run()
+
+    guided = [row for row in result.history if row["iteration"] >= 2 and row.get("phase") != "validation"]
+    assert len(guided) == 2
+    for row in guided:
+        debug = row["selection_debug"]
+        assert debug["mode"] == "bnn_qlogei_resampled"
+        assert debug["candidate_source"] == "resampled_continuous_bounds"
+        assert debug["resampled_candidate_target"] == 12
+        assert debug["resampled_candidate_count"] > 0
+        assert debug["soft_ei_tau"] == 1.0
+        assert all(abs(float(value) / 0.01 - round(float(value) / 0.01)) < 1e-8 for value in row["requested_geometry"])
+
+
 def test_default_optimizer_botorch_uses_gp_qlogei_backend(tmp_path: Path) -> None:
     candidates = _bclf_like_candidates()
     optimizer = OptimizerBoTorch(
@@ -400,6 +591,81 @@ def test_optimizer_botorch_can_use_gp_qlogei_backend(tmp_path: Path) -> None:
     result = optimizer.run()
 
     assert result.history[-1]["selection_debug"]["mode"] == "gp_qlogei_discrete"
+
+
+def test_gp_qlogei_score_candidates_matches_select() -> None:
+    candidates = _bclf_like_candidates()
+    backend = GPqLogEIAcquisitionBackend()
+    X_train = np.asarray([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], dtype=float)
+    X_score = np.asarray([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0], [0.25, 0.75]], dtype=float)
+    y_train = np.asarray([[4.0], [1.0], [3.0]], dtype=float)
+    fit = backend.fit(X_train, y_train, seed=7)
+    assert fit.ready
+
+    history = [{"objective": float(value)} for value in y_train.reshape(-1)]
+    scores = backend.score_candidates(
+        candidates_actual=candidates,
+        candidates_normalized=X_score,
+        history=history,
+        tr_debug={"candidate_source": "unit_test"},
+    )
+    selected = backend.select(
+        candidates_actual=candidates,
+        candidates_normalized=X_score,
+        history=history,
+        tr_debug={"candidate_source": "unit_test"},
+    )
+
+    assert scores.predicted_mean.shape == (len(candidates),)
+    assert scores.predicted_uncertainty.shape == (len(candidates),)
+    assert scores.acquisition_score.shape == (len(candidates),)
+    assert np.isfinite(scores.acquisition_score).all()
+    assert selected.selection_debug is not None
+    assert selected.selection_debug["selected_pos"] == int(np.argmax(scores.acquisition_score))
+
+
+def test_gp_qlogei_uses_continuous_acqf_for_continuous_space(tmp_path: Path) -> None:
+    variable_order = ["L", "L1", "L2", "W", "W1", "W2", "S1", "S2"]
+    bounds = {
+        "L": (7.7, 7.9),
+        "L1": (8.0, 8.2),
+        "L2": (7.8, 8.0),
+        "W": (0.9, 1.1),
+        "W1": (0.7, 0.9),
+        "W2": (0.9, 1.1),
+        "S1": (0.13, 0.16),
+        "S2": (0.55, 0.60),
+    }
+    optimizer = OptimizerBoTorch(
+        candidate_space=ContinuousCandidateSpace(
+            variable_order=variable_order,
+            variable_bounds=bounds,
+            pool_size=8,
+            seed=23,
+            resolution=0.01,
+        ),
+        simulator=QuadraticSimulator(),
+        optimization_spec=ScalarResponseSpec(),
+        recorder=ExperimentRecorder(output_dir=tmp_path / "records_gp_continuous"),
+        budget=1,
+        n_init=2,
+        seed=23,
+        run_id="gp_qlogei_continuous",
+        checkpoint_path=tmp_path / "gp_qlogei_continuous.checkpoint.json",
+        acquisition_backend=GPqLogEIAcquisitionBackend(
+            num_restarts=2,
+            raw_samples=8,
+            maxiter=5,
+            fallback_samples=16,
+        ),
+    )
+
+    result = optimizer.run()
+
+    post_init = result.history[-1]
+    assert post_init["selection_debug"]["mode"] == "gp_qlogei_continuous"
+    assert post_init["selection_debug"]["kernel_runtime"]["optimizer"] == "optimize_acqf"
+    assert all(abs(float(value) / 0.01 - round(float(value) / 0.01)) < 1e-8 for value in post_init["requested_geometry"])
 
 
 def test_gp_and_bnn_backends_run_on_tiny_replay_dataset_without_repeats(tmp_path: Path) -> None:

@@ -50,7 +50,7 @@ PYTHONPATH=src:. python scripts/server/run_random_template_watch.py \
 
 This script does not copy/export artifacts. Results stay in queue directories for external transfer scripts.
 
-See `docs/server_worker_coherent_test.md` for the paired Windows worker command and troubleshooting notes.
+See `docs/engineering/server_worker/server_worker_coherent_test.md` for the paired Windows worker command and troubleshooting notes.
 
 ## Remote Fetch + Run + Submit
 

@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .botorch_acquisition import BoTorchAcquisitionBackend, GPqLogEIAcquisitionBackend
+from .candidate_space import ContinuousCandidateSpace
 from .optimizer_base import OptimizerBase, SelectionResult, SimulationRecord
 
 
@@ -29,6 +30,7 @@ class OptimizerBoTorch(OptimizerBase):
         tr_expand_factor: float = 2.0,
         tr_shrink_factor: float = 0.5,
         tr_improvement_epsilon: float = 1e-9,
+        not_ready_selection_policy: str = "first",
         **kwargs: Any,
     ) -> None:
         if retrain_every <= 0:
@@ -43,6 +45,9 @@ class OptimizerBoTorch(OptimizerBase):
             raise ValueError("tr_expand_factor must be > 1.0")
         if not (0.0 < tr_shrink_factor < 1.0):
             raise ValueError("tr_shrink_factor must be in (0, 1)")
+        policy = str(not_ready_selection_policy).strip().lower()
+        if policy not in {"first", "random"}:
+            raise ValueError("not_ready_selection_policy must be 'first' or 'random'")
         self.acquisition_backend = acquisition_backend or GPqLogEIAcquisitionBackend()
         self.retrain_every = int(retrain_every)
         self.use_trust_region = bool(use_trust_region)
@@ -54,6 +59,7 @@ class OptimizerBoTorch(OptimizerBase):
         self.tr_expand_factor = float(tr_expand_factor)
         self.tr_shrink_factor = float(tr_shrink_factor)
         self.tr_improvement_epsilon = float(tr_improvement_epsilon)
+        self.not_ready_selection_policy = policy
         self._model_ready = False
         self._last_fit_error: str | None = None
         self._tr_center_norm: np.ndarray | None = None
@@ -68,7 +74,7 @@ class OptimizerBoTorch(OptimizerBase):
         self._update_trust_region_state()
         if self.state.step % self.retrain_every == 0:
             self._fit_model()
-        selection = self._select_next(self.candidate_space.remaining())
+        selection = self._select_next()
         return [selection]
 
     def _fit_model(self) -> None:
@@ -98,13 +104,32 @@ class OptimizerBoTorch(OptimizerBase):
         self._model_ready = bool(result.ready)
         self._last_fit_error = result.error
 
-    def _select_next(self, candidates_actual: np.ndarray) -> SelectionResult:
+    def _select_next(self, candidates_actual: np.ndarray | None = None) -> SelectionResult:
+        if candidates_actual is None:
+            continuous_selection = self._select_next_continuous()
+            if continuous_selection is not None:
+                return continuous_selection
+            resampled_selection = self._select_next_resampled_continuous()
+            if resampled_selection is not None:
+                return resampled_selection
+            candidates_actual = self.candidate_space.remaining()
         candidates_actual = np.asarray(candidates_actual, dtype=float)
         if len(candidates_actual) == 0:
             raise RuntimeError("No candidates left to select")
         candidates_actual, tr_debug = self._apply_trust_region_filter(candidates_actual)
 
         if not self._model_ready:
+            if self.not_ready_selection_policy == "random":
+                return self._random_selection(
+                    candidates_actual,
+                    {
+                        "mode": "random_not_ready",
+                        "model_fit_status": "failed" if self._last_fit_error else "not_ready",
+                        "fit_error": self._last_fit_error,
+                        "fallback_policy": "random_remaining_candidate",
+                        **tr_debug,
+                    },
+                )
             return self._deterministic_selection(
                 candidates_actual,
                 {
@@ -136,9 +161,258 @@ class OptimizerBoTorch(OptimizerBase):
                 },
             )
 
+    def _select_next_continuous(self) -> SelectionResult | None:
+        if not isinstance(self.candidate_space, ContinuousCandidateSpace):
+            return None
+        select_continuous = getattr(self.acquisition_backend, "select_continuous", None)
+        if not callable(select_continuous):
+            return None
+        if not self._model_ready:
+            return None
+
+        bounds_normalized, tr_debug = self._continuous_normalized_bounds()
+        try:
+            return select_continuous(
+                bounds_normalized=bounds_normalized,
+                candidate_space=self.candidate_space,
+                history=self._history,
+                tr_debug=tr_debug,
+                evaluated_actual=np.asarray(self.state.evaluated_geometries, dtype=float),
+            )
+        except (RuntimeError, ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+            return self._random_continuous_selection(
+                bounds_normalized,
+                {
+                    "mode": "random_continuous_select_error",
+                    "model_fit_status": "failed",
+                    "fit_error": self._last_fit_error,
+                    "select_error": f"{type(exc).__name__}: {exc}",
+                    "fallback_policy": "random_continuous_candidate",
+                    **tr_debug,
+                },
+            )
+
+    def _select_next_resampled_continuous(self) -> SelectionResult | None:
+        if not isinstance(self.candidate_space, ContinuousCandidateSpace):
+            return None
+
+        bounds_normalized, tr_debug = self._continuous_normalized_bounds()
+        if not self._model_ready:
+            return self._random_continuous_selection(
+                bounds_normalized,
+                {
+                    "mode": "random_not_ready_continuous",
+                    "model_fit_status": "failed" if self._last_fit_error else "not_ready",
+                    "fit_error": self._last_fit_error,
+                    "fallback_policy": "random_continuous_candidate",
+                    **tr_debug,
+                },
+            )
+
+        candidates_actual, sample_debug = self._resampled_continuous_candidates(bounds_normalized)
+        if len(candidates_actual) == 0:
+            return self._random_continuous_selection(
+                bounds_normalized,
+                {
+                    "mode": "random_continuous_resample_empty",
+                    "model_fit_status": "ok",
+                    "fallback_policy": "random_continuous_candidate",
+                    **tr_debug,
+                    **sample_debug,
+                },
+            )
+
+        try:
+            return self.acquisition_backend.select(
+                candidates_actual=candidates_actual,
+                candidates_normalized=self.candidate_space.normalize(candidates_actual),
+                history=self._history,
+                tr_debug={**tr_debug, **sample_debug},
+            )
+        except (RuntimeError, ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+            return self._random_continuous_selection(
+                bounds_normalized,
+                {
+                    "mode": "random_continuous_select_error",
+                    "model_fit_status": "failed",
+                    "fit_error": self._last_fit_error,
+                    "select_error": f"{type(exc).__name__}: {exc}",
+                    "fallback_policy": "random_continuous_candidate",
+                    **tr_debug,
+                    **sample_debug,
+                },
+            )
+
+    def _resampled_continuous_candidates(self, bounds_normalized: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+        if not isinstance(self.candidate_space, ContinuousCandidateSpace):
+            raise RuntimeError("continuous resampling requires ContinuousCandidateSpace")
+        target_count = int(getattr(self.candidate_space, "pool_size", 0))
+        if target_count <= 0:
+            raise ValueError("continuous resampling requires candidate_space.pool_size > 0")
+
+        seen = self._evaluated_geometry_keys()
+        rows: list[np.ndarray] = []
+        attempts = 0
+        raw_count = 0
+        duplicate_count = 0
+        max_attempts = 5
+        while len(rows) < target_count and attempts < max_attempts:
+            attempts += 1
+            batch = self.candidate_space.sample_uniform(
+                target_count,
+                self._rng,
+                bounds_normalized=bounds_normalized,
+            )
+            raw_count += int(len(batch))
+            for row in np.asarray(batch, dtype=float):
+                key = tuple(np.round(row.reshape(-1), 8))
+                if key in seen:
+                    duplicate_count += 1
+                    continue
+                seen.add(key)
+                rows.append(row.reshape(-1))
+                if len(rows) >= target_count:
+                    break
+
+        candidates = (
+            np.asarray(rows, dtype=float)
+            if rows
+            else np.empty((0, len(self.candidate_space.variable_order)), dtype=float)
+        )
+        return candidates, {
+            "candidate_source": "resampled_continuous_bounds",
+            "resampled_candidate_target": int(target_count),
+            "resampled_candidate_count": int(len(candidates)),
+            "resampled_attempts": int(attempts),
+            "resampled_raw_count": int(raw_count),
+            "resampled_duplicate_count": int(duplicate_count),
+        }
+
+    def _evaluated_geometry_keys(self) -> set[tuple[float, ...]]:
+        if not self.state.evaluated_geometries:
+            return set()
+        evaluated = np.asarray(self.state.evaluated_geometries, dtype=float).reshape(
+            -1,
+            len(self.candidate_space.variable_order),
+        )
+        return {tuple(np.round(row.reshape(-1), 8)) for row in evaluated}
+
+    def _continuous_normalized_bounds(self) -> tuple[np.ndarray, dict[str, Any]]:
+        if not isinstance(self.candidate_space, ContinuousCandidateSpace):
+            raise RuntimeError("continuous bounds require ContinuousCandidateSpace")
+        base_bounds = self.candidate_space.normalized_bounds()
+        if not self.use_trust_region:
+            return base_bounds, {"tr_active": False, "candidate_source": "continuous_acqf"}
+
+        center = self._resolve_tr_center_norm()
+        if center is None:
+            return base_bounds, {
+                "tr_active": True,
+                "tr_filter_applied": False,
+                "tr_filter_reason": "center_unavailable",
+                "tr_length": float(self._tr_length),
+                "candidate_source": "continuous_acqf_global_fallback",
+            }
+
+        lower = np.maximum(base_bounds[0], center.reshape(-1) - float(self._tr_length))
+        upper = np.minimum(base_bounds[1], center.reshape(-1) + float(self._tr_length))
+        if np.any(upper <= lower):
+            return base_bounds, {
+                "tr_active": True,
+                "tr_filter_applied": False,
+                "tr_filter_reason": "empty_region_fallback_global",
+                "tr_length": float(self._tr_length),
+                "tr_center": center.tolist(),
+                "tr_update_action": self._last_tr_update_action,
+                "candidate_source": "continuous_acqf_global_fallback",
+            }
+        return np.vstack([lower, upper]), {
+            "tr_active": True,
+            "tr_filter_applied": True,
+            "tr_length": float(self._tr_length),
+            "tr_center": center.tolist(),
+            "tr_update_action": self._last_tr_update_action,
+            "candidate_source": "continuous_acqf_trust_region",
+        }
+
+    def _random_continuous_selection(self, bounds_normalized: np.ndarray, debug: dict[str, Any]) -> SelectionResult:
+        if not isinstance(self.candidate_space, ContinuousCandidateSpace):
+            raise RuntimeError("random continuous selection requires ContinuousCandidateSpace")
+        bounds = np.asarray(bounds_normalized, dtype=float)
+        if bounds.shape != (2, len(self.candidate_space.variable_order)):
+            raise ValueError("bounds_normalized shape mismatch")
+        evaluated = np.asarray(self.state.evaluated_geometries, dtype=float)
+        max_attempts = 100
+        selected_actual: np.ndarray | None = None
+        for attempt in range(max_attempts):
+            selected_norm = self._rng.uniform(bounds[0], bounds[1])
+            actual = np.asarray(self.candidate_space.denormalize(selected_norm), dtype=float).reshape(-1)
+            actual = np.asarray(self.candidate_space.project(actual), dtype=float).reshape(-1)
+            if not self._is_evaluated_geometry(actual, evaluated):
+                selected_actual = actual
+                debug = dict(debug)
+                debug.update(
+                    {
+                        "random_continuous_attempts": int(attempt + 1),
+                        "selected_normalized": self.candidate_space.normalize(actual).tolist(),
+                    }
+                )
+                break
+        if selected_actual is None:
+            selected_norm = self._rng.uniform(bounds[0], bounds[1])
+            selected_actual = np.asarray(
+                self.candidate_space.project(self.candidate_space.denormalize(selected_norm)),
+                dtype=float,
+            ).reshape(-1)
+            debug = dict(debug)
+            debug.update(
+                {
+                    "random_continuous_attempts": int(max_attempts),
+                    "selected_normalized": self.candidate_space.normalize(selected_actual).tolist(),
+                    "duplicate_avoidance_exhausted": True,
+                }
+            )
+        return SelectionResult(
+            requested_geometry=selected_actual,
+            selection_debug=debug,
+        )
+
+    def _is_evaluated_geometry(self, actual: np.ndarray, evaluated: np.ndarray) -> bool:
+        if evaluated.size == 0:
+            return False
+        evaluated = evaluated.reshape(-1, len(np.asarray(actual).reshape(-1)))
+        target = np.asarray(actual, dtype=float).reshape(1, -1)
+        return bool(
+            np.any(
+                np.all(
+                    np.isclose(
+                        evaluated,
+                        target,
+                        atol=float(getattr(self.candidate_space, "match_atol", 1e-9)),
+                        rtol=float(getattr(self.candidate_space, "match_rtol", 1e-9)),
+                    ),
+                    axis=1,
+                )
+            )
+        )
+
     def _deterministic_selection(self, candidates_actual: np.ndarray, debug: dict[str, Any]) -> SelectionResult:
         return SelectionResult(
             requested_geometry=np.asarray(candidates_actual[0], dtype=float),
+            selection_debug=debug,
+        )
+
+    def _random_selection(self, candidates_actual: np.ndarray, debug: dict[str, Any]) -> SelectionResult:
+        pos = int(self._rng.integers(0, len(candidates_actual)))
+        debug = dict(debug)
+        debug.update(
+            {
+                "selected_pos": pos,
+                "candidate_pool_size": int(len(candidates_actual)),
+            }
+        )
+        return SelectionResult(
+            requested_geometry=np.asarray(candidates_actual[pos], dtype=float),
             selection_debug=debug,
         )
 

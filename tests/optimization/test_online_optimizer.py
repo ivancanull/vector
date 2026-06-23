@@ -120,6 +120,23 @@ def test_candidate_space_normalization_roundtrip() -> None:
     assert np.allclose(discrete.denormalize(discrete.normalize(values)), values)
 
 
+def test_continuous_candidate_space_initial_sampling_is_not_limited_by_pool_size() -> None:
+    continuous = ContinuousCandidateSpace(
+        variable_order=["x", "y"],
+        variable_bounds={"x": (0.0, 1.0), "y": (2.0, 3.0)},
+        pool_size=1,
+        seed=1,
+        resolution=0.1,
+    )
+
+    samples = continuous.sample_initial(5, np.random.default_rng(2))
+
+    assert samples.shape == (5, 2)
+    assert np.all(samples[:, 0] >= 0.0) and np.all(samples[:, 0] <= 1.0)
+    assert np.all(samples[:, 1] >= 2.0) and np.all(samples[:, 1] <= 3.0)
+    assert np.allclose(samples / 0.1, np.round(samples / 0.1))
+
+
 def test_online_optimizer_uses_spec_evaluate_and_actual_geometry(tmp_path: Path) -> None:
     spec = ScalarEncodedSpec()
     candidate_space = ContinuousCandidateSpace(

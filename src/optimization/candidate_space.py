@@ -202,6 +202,30 @@ class ContinuousCandidateSpace(DiscreteCandidateSpace):
         highs = np.asarray([self.variable_bounds[name][1] for name in self.variable_order], dtype=float)
         self._set_transform_from_bounds(lows, highs)
 
+    def sample_initial(self, n: int, rng: np.random.Generator) -> np.ndarray:
+        if n < 0:
+            raise ValueError("n must be >= 0")
+        if n == 0:
+            return np.empty((0, len(self.variable_order)), dtype=float)
+        return self.sample_uniform(n, rng)
+
+    def sample_uniform(
+        self,
+        n: int,
+        rng: np.random.Generator,
+        *,
+        bounds_normalized: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if n < 0:
+            raise ValueError("n must be >= 0")
+        if n == 0:
+            return np.empty((0, len(self.variable_order)), dtype=float)
+        bounds = self.normalized_bounds() if bounds_normalized is None else np.asarray(bounds_normalized, dtype=float)
+        if bounds.shape != (2, len(self.variable_order)):
+            raise ValueError("bounds_normalized shape mismatch")
+        Xn = rng.uniform(bounds[0], bounds[1], size=(int(n), len(self.variable_order)))
+        return np.asarray(self.project(self.denormalize(Xn)), dtype=float)
+
     def _sample_pool(self, *, variable_order: list[str], rng: np.random.Generator) -> np.ndarray:
         rows: list[list[float]] = []
         for _ in range(self.pool_size):
@@ -227,6 +251,32 @@ class ContinuousCandidateSpace(DiscreteCandidateSpace):
         if step <= 0:
             raise ValueError("resolution values must be > 0")
         return float(round(round(value / step) * step, 8))
+
+    def project(self, geometry: np.ndarray) -> np.ndarray:
+        """Clip physical geometry to bounds and snap to the configured resolution."""
+
+        X = self._as_matrix(geometry)
+        rows: list[list[float]] = []
+        for row in X:
+            projected_row: list[float] = []
+            for idx, name in enumerate(self.variable_order):
+                low, high = self.variable_bounds[name]
+                value = float(np.clip(float(row[idx]), low, high))
+                value = self._snap_value(name, value)
+                projected_row.append(float(np.clip(value, low, high)))
+            rows.append(projected_row)
+        out = np.asarray(rows, dtype=float)
+        return out[0] if np.asarray(geometry).ndim == 1 else out
+
+    def normalized_bounds(self) -> np.ndarray:
+        """Return the optimizer-facing normalized box for continuous acquisition."""
+
+        return np.vstack(
+            [
+                np.zeros(len(self.variable_order), dtype=float),
+                np.ones(len(self.variable_order), dtype=float),
+            ]
+        )
 
     def state_dict(self) -> dict[str, Any]:
         payload = super().state_dict()
